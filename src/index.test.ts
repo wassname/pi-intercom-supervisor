@@ -126,6 +126,21 @@ test("a directive from the paired supervisor becomes a real user message", async
   assert.equal(worker.userMessages[0].options, undefined);
 });
 
+test("a directive to a busy worker interrupts, instead of waiting for the whole task", async () => {
+  // Seen in a real run: the supervisor corrected the worker mid-task and the correction never
+  // arrived, because followUp waits for the agent to finish everything.
+  const worker = harness(WORKER_ID, { isIdle: false });
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 5));
+
+  worker.deliver(SUPER_ID, { t: "directive", to: WORKER_ID, text: "it is Cthulhu, not clutho" });
+  await new Promise((r) => setTimeout(r, 5));
+
+  assert.equal(worker.userMessages.length, 1);
+  assert.deepEqual(worker.userMessages[0].options, { deliverAs: "steer" });
+});
+
 test("a directive from an unpaired session is dropped", async () => {
   const worker = harness(WORKER_ID);
   await worker.start();

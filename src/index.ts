@@ -75,7 +75,10 @@ export default function (pi: any) {
     if (from !== state.pairedId) return; // ignore anything from a session we are not paired with
 
     if (wire.t === "directive" && state.role === "worker") {
-      pi.sendUserMessage(`[supervisor] ${wire.text}`, ctx?.isIdle() ? undefined : { deliverAs: "followUp" });
+      // Busy worker gets "steer": delivered after the current tool calls, before the next LLM call.
+      // "followUp" would make it finish the whole task first, so a correction arrives too late to
+      // correct anything. Idle worker takes no option, so the message starts a turn.
+      pi.sendUserMessage(`[supervisor] ${wire.text}`, ctx?.isIdle() ? undefined : { deliverAs: "steer" });
       return;
     }
 
