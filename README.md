@@ -74,7 +74,7 @@ npx tsx scripts/e2e.ts        # tier 3: two real pi processes and a real model, 
 PI_SUPERVISE_DEBUG=1 pi ...   # trace the wire to stderr, since the channel is invisible
 ```
 
-Evidence from a real run is in [docs/uat/](docs/uat/).
+`scripts/e2e.ts` writes its log to `docs/uat/`, which is not committed.
 
 ## Known limits
 

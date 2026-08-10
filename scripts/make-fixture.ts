@@ -4,8 +4,8 @@
  * Synthetic on purpose. An earlier version of this fixture was a verbatim copy of a real user
  * session, which must not go into a git repo. The test only needs the tree shape.
  */
-import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 const TURNS = 188; // 2 entries per turn, plus the header and the abandoned branch
 const ABANDONED = 11; // turns on the branch that was rewound away
@@ -52,6 +52,7 @@ for (let i = 0; i < TURNS; i++) {
 }
 
 const out = resolve(import.meta.dirname, "../test/forked-session.jsonl");
+mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, `${lines.join("\n")}\n`);
 console.log(`wrote ${out}`);
 console.log(`entries (excluding the session header): ${n}`);

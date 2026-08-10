@@ -7,6 +7,7 @@
     "extensions": ["./src/index.ts"]
   },
   "scripts": {
+    "pretest": "tsx scripts/make-fixture.ts",
     "test": "tsx --test src/*.test.ts"
   },
   "peerDependencies": {
