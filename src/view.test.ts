@@ -60,31 +60,26 @@ test("buildView stays under the 16 KiB channel limit and says it trimmed", () =>
   assert.match(view, /\[earlier turns trimmed\]/);
 });
 
-test("a real forked session: the view holds only the live branch", async () => {
-  // Real fixture, not a hand-built tree: this session has one parent with two children.
+test("the real forked fixture has a live branch shorter than the file", async () => {
+  // This only checks the fixture is still a fork. Whether pi-supervise reads the live branch is
+  // tested in index.test.ts, where getBranch and getEntries return different things. An earlier
+  // version asserted on the rendered view and passed even with every abandoned entry included,
+  // because byte trimming removed them anyway.
   const { parseSessionEntries, buildContextEntries } = await import("@earendil-works/pi-coding-agent");
-  const { readFileSync, existsSync } = await import("node:fs");
+  const { readFileSync } = await import("node:fs");
   const fixture = new URL("../test/forked-session.jsonl", import.meta.url).pathname;
-  if (!existsSync(fixture)) return; // fixture is copied from a real session, see test/README.md
 
   const all = parseSessionEntries(readFileSync(fixture, "utf-8")).filter((e: any) => e.type !== "session");
   const byId = new Map(all.map((e: any) => [e.id, e]));
   const leaf = all[all.length - 1] as any;
   const branch = buildContextEntries(all as any, leaf.id, byId as any);
 
-  assert.ok(branch.length < all.length, "the fixture must actually contain an abandoned branch");
-  const liveIds = new Set(branch.map((e: any) => e.id));
-  const dropped = all.filter((e: any) => !liveIds.has(e.id));
-  assert.ok(dropped.length > 0);
+  assert.equal(all.length, 400);
+  assert.equal(branch.length, 377);
+  assert.ok(branch.length < all.length, "the fixture must still contain an abandoned branch");
+});
 
-  const view = buildView({ goal: "g", status: "idle", entries: branch as any, recentTurns: 10000 });
-  const droppedText = dropped
-    .filter((e: any) => e.type === "message" && Array.isArray(e.message?.content))
-    .flatMap((e: any) => e.message.content.filter((b: any) => b.type === "text").map((b: any) => b.text))
-    .map((t: string) => t.trim())
-    .filter((t: string) => t.length > 80);
-
-  for (const text of droppedText) {
-    assert.ok(!view.includes(text.slice(0, 80)), `view leaked an abandoned entry: ${text.slice(0, 60)}`);
-  }
+test("a long goal cannot push the view past the broker limit", () => {
+  const view = buildView({ goal: "x".repeat(60000), status: "idle", entries: [assistant("hi")] });
+  assert.ok(Buffer.byteLength(view, "utf-8") <= MAX_VIEW_BYTES, `view was ${Buffer.byteLength(view)} bytes`);
 });

@@ -118,7 +118,7 @@ export function buildView({ goal, status, entries, recentTurns = 24 }: ViewInput
 
   const head = [
     `# Goal`,
-    goal || "not set",
+    (goal || "not set").slice(0, 2000),
     ``,
     `# Worker`,
     `status: ${status}`,
@@ -142,6 +142,11 @@ export function buildView({ goal, status, entries, recentTurns = 24 }: ViewInput
   while (Buffer.byteLength(view, "utf-8") > MAX_VIEW_BYTES && lines.length > 1) {
     lines = lines.slice(1);
     view = `${head}\n[earlier turns trimmed]\n${lines.join("\n")}\n`;
+  }
+  // The head can still be long on its own (many files, many problems). The broker rejects anything
+  // over 16 KiB and the extension never hears about it, so cut hard rather than go blind.
+  if (Buffer.byteLength(view, "utf-8") > MAX_VIEW_BYTES) {
+    view = `${Buffer.from(view, "utf-8").subarray(0, MAX_VIEW_BYTES - 20).toString("utf-8")}\n[view truncated]\n`;
   }
   return view;
 }

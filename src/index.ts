@@ -106,7 +106,12 @@ export default function (pi: any) {
       },
       onEvent: (event: IntercomExtensionEvent) => {
         if (event.type === "message" && isWire(event.payload)) {
-          void onWire(event.fromSessionId, event.payload);
+          // Not awaited by the caller, so a rejection here would be an unhandled rejection with no
+          // notice. resolveOwnId throws during a startup race.
+          onWire(event.fromSessionId, event.payload).catch((err: Error) => {
+            debug("wire dropped", { error: err.message });
+            ctx?.ui?.notify?.(`pi-supervise: dropped a message, ${err.message}`, "error");
+          });
         }
       },
     });

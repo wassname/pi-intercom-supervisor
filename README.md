@@ -47,12 +47,20 @@ turn, so each side triggers its own turn locally with `pi.sendUserMessage`. That
 the worker's user and assistant trajectory, where it belongs.
 
 Pairing is on `fromSessionId`, which the broker stamps from its own registry
-(`broker.ts:1246`), so a payload cannot forge it. The broker has no socket authentication, and its
+(`broker.ts:1247`), so a payload cannot forge it. The broker has no socket authentication, and its
 own README calls session IDs "the trusted addressing key", so the trust level here is "any process
 running as you", the same as pi itself.
 
+Messages go out with `audience: "capable"`, which the broker routes to every session that loads
+pi-supervise, not only to the paired one. `wire.to` is a filter applied by the receiver. So a third
+pi session with this extension loaded can read every view and every steer, and can send a `pair` to
+any worker that is not paired yet. On one machine, one user, that is the same trust level as the
+broker itself. Do not load this extension in a session you would not trust with the worker's
+transcript.
+
 `MAX_STEER_ROUNDS` (default 20, set `PI_SUPERVISE_MAX_ROUNDS`) stops an unattended loop. The count
-is written to session entries, so a compaction or a reload cannot reset it.
+is written to session entries, so a compaction or a reload cannot reset it. A non-integer value
+throws at load, because `NaN` would make the cap silently never fire.
 
 The supervisor policy comes from `<cwd>/.pi/SUPERVISOR.md`, then `<agent dir>/SUPERVISOR.md`, then a
 built-in default. That is the same precedence as pi-supervisor, so an existing file keeps working.
@@ -76,5 +84,7 @@ Evidence from a real run is in [docs/uat/](docs/uat/).
   supervisor compaction.
 - The first pair request wins. A second one is ignored, because there is nothing to authenticate it
   against.
-- Views are capped at 15 KB, under the channel's 16 KiB limit, and the transcript is trimmed from
-  the front to fit.
+- Views are cut to 15 KB, under the channel's 16 KiB limit. The transcript is trimmed from the
+  front first; if the header alone is still too big, the whole view is truncated. Without that cut
+  the broker rejects the payload and the extension is never told, so the supervisor would go blind.
+- Every capable session sees every message. See the routing note above.

@@ -7,8 +7,21 @@
 
 export const NAMESPACE = "wassname/pi-supervise/v1";
 
-/** Steer rounds allowed before the loop stops itself. Overnight runs cost money. */
-export const MAX_STEER_ROUNDS = Number(process.env.PI_SUPERVISE_MAX_ROUNDS ?? 20);
+/**
+ * Steer rounds allowed before the loop stops itself. Overnight runs cost money.
+ * A bad value must crash here: NaN or Infinity would make `rounds >= cap` always false, which is a
+ * cap that silently does nothing.
+ */
+export const MAX_STEER_ROUNDS = readCap(process.env.PI_SUPERVISE_MAX_ROUNDS);
+
+export function readCap(raw: string | undefined): number {
+  if (raw === undefined) return 20;
+  const cap = Number(raw);
+  if (!Number.isInteger(cap) || cap < 1) {
+    throw new Error(`PI_SUPERVISE_MAX_ROUNDS must be a whole number of 1 or more, got ${JSON.stringify(raw)}`);
+  }
+  return cap;
+}
 
 export type Wire =
   | { t: "pair"; to: string; goal: string }
@@ -17,11 +30,16 @@ export type Wire =
   | { t: "done"; to: string; reason: string }
   | { t: "unpair"; to: string };
 
+/** Validates the field each kind carries, so a malformed peer cannot inject "[supervisor] undefined". */
 export function isWire(payload: unknown): payload is Wire {
   if (typeof payload !== "object" || payload === null) return false;
-  const { t, to } = payload as Record<string, unknown>;
-  return typeof to === "string"
-    && (t === "pair" || t === "view" || t === "directive" || t === "done" || t === "unpair");
+  const { t, to, goal, view, text, reason } = payload as Record<string, unknown>;
+  if (typeof to !== "string") return false;
+  if (t === "pair") return typeof goal === "string";
+  if (t === "view") return typeof view === "string";
+  if (t === "directive") return typeof text === "string" && text.trim().length > 0;
+  if (t === "done") return typeof reason === "string";
+  return t === "unpair";
 }
 
 export interface SuperviseState {

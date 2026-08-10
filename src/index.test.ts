@@ -3,13 +3,31 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { INTERCOM_EXTENSION_REGISTER_EVENT } from "pi-intercom/extension-api.ts";
 import extension from "./index.ts";
-import { MAX_STEER_ROUNDS, STATE_ENTRY, restoreState } from "./protocol.ts";
+import { MAX_STEER_ROUNDS, STATE_ENTRY, isWire, readCap, restoreState } from "./protocol.ts";
+
+test("a bad round cap crashes instead of becoming an infinite loop", () => {
+  assert.equal(readCap(undefined), 20);
+  assert.equal(readCap("5"), 5);
+  // Number("abc") is NaN and Number("1e999") is Infinity. Both make `rounds >= cap` always false,
+  // so the cap would silently never fire and an unattended run would go all night.
+  for (const bad of ["abc", "1e999", "0", "-3", "2.5", ""]) {
+    assert.throws(() => readCap(bad), /whole number/, `readCap(${JSON.stringify(bad)}) must throw`);
+  }
+});
+
+test("a directive with no text is rejected, so the worker never sees undefined", () => {
+  assert.equal(isWire({ t: "directive", to: "x", text: "do it" }), true);
+  assert.equal(isWire({ t: "directive", to: "x" }), false);
+  assert.equal(isWire({ t: "directive", to: "x", text: "   " }), false);
+  assert.equal(isWire({ t: "view", to: "x" }), false);
+  assert.equal(isWire({ t: "pair", to: "x", goal: "g" }), true);
+});
 
 const WORKER_ID = "session-worker";
 const SUPER_ID = "session-supervisor";
 
 /** Fake ExtensionAPI, same shape as pi-intercom's own test harness. */
-function harness(ownId: string, { entries = [] as any[], isIdle = true } = {}) {
+function harness(ownId: string, { entries = [] as any[], isIdle = true, branch = undefined as any[] | undefined } = {}) {
   const bus = new EventEmitter();
   const handlers = new Map<string, Array<(e: any, c: any) => any>>();
   const commands = new Map<string, (args: string, ctx: any) => any>();
@@ -58,7 +76,8 @@ function harness(ownId: string, { entries = [] as any[], isIdle = true } = {}) {
     sessionManager: {
       getSessionId: () => ownId,
       getEntries: () => entries,
-      getBranch: () => entries,
+      // Deliberately different from getEntries, so a test can tell which one the view reads.
+      getBranch: () => branch ?? entries,
     },
   };
 
@@ -155,6 +174,23 @@ test("on settle the worker publishes a view built from the live branch", async (
   assert.equal(view.to, SUPER_ID);
   assert.match(view.view, /# Goal\nthe goal/);
   assert.match(view.view, /USER: do the thing/);
+});
+
+test("the view is built from the live branch, not from every entry in the session", async () => {
+  // An abandoned fork leaves entries in getEntries that getBranch drops. Reading the wrong one
+  // makes the supervisor judge work that was undone.
+  const worker = harness(WORKER_ID, {
+    entries: [message("user", "ABANDONED after a rewind"), message("user", "kept on the live branch")],
+    branch: [message("user", "kept on the live branch")],
+  });
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 5));
+
+  await worker.settle();
+  const view = worker.published.find((p) => p.t === "view");
+  assert.match(view.view, /kept on the live branch/);
+  assert.doesNotMatch(view.view, /ABANDONED after a rewind/);
 });
 
 test("an unpaired session publishes nothing on settle", async () => {
