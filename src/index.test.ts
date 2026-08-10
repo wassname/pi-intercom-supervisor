@@ -206,6 +206,26 @@ test("after a reload the cap still holds, because state comes back from session 
   assert.match(afterReload.content[0].text, /cap reached/i);
 });
 
+test("done unpairs the worker, so it stops publishing views", async () => {
+  const worker = harness(WORKER_ID, { entries: [message("user", "hi")] });
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 5));
+
+  await worker.settle();
+  assert.equal(worker.published.filter((p) => p.t === "view").length, 1, "paired worker publishes");
+
+  worker.deliver(SUPER_ID, { t: "done", to: WORKER_ID, reason: "results.md line 3" });
+  await new Promise((r) => setTimeout(r, 5));
+
+  await worker.settle();
+  assert.equal(
+    worker.published.filter((p) => p.t === "view").length,
+    1,
+    "after done the worker must not publish again",
+  );
+});
+
 test("steer refuses when the session is not supervising", async () => {
   const lone = harness(SUPER_ID);
   await lone.start();
