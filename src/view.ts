@@ -12,6 +12,7 @@
 import { compile } from "@sting8k/pi-vcc/src/core/summarize.ts";
 import { normalize } from "@sting8k/pi-vcc/src/core/normalize.ts";
 import { extractFiles } from "@sting8k/pi-vcc/src/extract/files.ts";
+import { extractCommits } from "@sting8k/pi-vcc/src/extract/commits.ts";
 
 /** Entry shapes we read. Only the fields this file touches, taken from real session jsonl. */
 export interface Block {
@@ -117,9 +118,11 @@ export function compactionSummary(entries: Entry[]): string {
  * because the same test failing again is not a new error.
  */
 export function progressKey(entries: Entry[]): string {
-  const files = extractFiles(normalize(messagesSince(entries) as any));
+  const blocks = normalize(messagesSince(entries) as any);
+  const files = extractFiles(blocks);
+  const commits = extractCommits(blocks).map((c) => c.hash ?? c.message);
   const distinct = [...new Set(problems(entries))].sort();
-  return [[...files.modified].sort().join(","), [...files.created].sort().join(","), distinct.join("|")].join("||");
+  return [[...files.modified].sort(), [...files.created].sort(), commits, distinct.sort()].map((p) => p.join(",")).join("||");
 }
 
 /**

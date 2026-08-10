@@ -49,6 +49,18 @@ test("progressKey still sees a new file past pi-vcc's ten path display cap", () 
   assert.notEqual(progressKey(many(13)), progressKey(many(12)), "the 13th file must count as progress");
 });
 
+test("a commit counts as progress, even when no file was written since", () => {
+  // A worker whose whole turn was committing looked stagnant while the view line claims to count
+  // commits.
+  const ran = (cmd: string, out: string): Entry[] => [
+    assistant("committing", [{ name: "bash", args: { command: cmd } }]),
+    toolResult("bash", out),
+  ];
+  const before = ran("git status", "nothing to commit");
+  const after = [...before, ...ran(`git commit -m "fix the parser"`, "[main abc1234] fix the parser")];
+  assert.notEqual(progressKey(after), progressKey(before));
+});
+
 test("the same error hit again is not progress", () => {
   // Otherwise a worker stuck rerunning one failing test resets the counter every review.
   const failed = [toolResult("bash", "3 failed\nexited with code 1")];

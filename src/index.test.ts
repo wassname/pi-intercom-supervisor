@@ -167,6 +167,20 @@ test("a second pair takes over, and the first supervisor is told it lost the wor
   assert.equal(worker.userMessages.length, 1, "the new supervisor can");
 });
 
+test("only the paired worker can end a run", async () => {
+  // A worker that has moved to another supervisor sends unpair to the one it left. That must not
+  // reach a supervisor which has itself moved on, or a live run ends and nobody asked for it.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "worker g");
+  sup.deliver("session-a-worker-we-left", { t: "unpair", to: SUPER_ID });
+  sup.deliver("session-a-worker-we-left", { t: "done", to: SUPER_ID, reason: "I decided we are finished" });
+  await new Promise((r) => setTimeout(r, 5));
+
+  const steer = await sup.tools.get("steer")!.execute("id", { message: "carry on" }, undefined, undefined, sup.ctx);
+  assert.ok(!steer.isError, `supervision must still be running, got ${steer.content[0].text}`);
+});
+
 test("the worker acknowledges a pair, so the supervisor knows it was heard", async () => {
   const worker = harness(WORKER_ID);
   await worker.start();
