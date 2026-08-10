@@ -36,6 +36,12 @@ Decide now. Call steer with one concrete next action, or call done if the goal i
 Steer rounds left: ${roundsLeft}. If you cannot decide without the human, say so in your reply
 instead of calling a tool, and say exactly what you need.`;
 
+/** Refusal shown to the supervisor when it tries to steer with no goal set. */
+export const NO_GOAL = `No goal is set, so you must not steer or finish. Inventing a task is worse
+than doing nothing. Reply in plain text asking the human for the goal, and say what you can see of
+the worker. Your reply reaches their phone. The goal is set only by them, with
+/supervise <worker> <goal>.`;
+
 export const CAP_REACHED = (rounds: number) =>
   `Steer cap reached after ${rounds} rounds. Stop steering. Report to the human what the worker
 achieved, what it did not, and the single decision you need from them.`;

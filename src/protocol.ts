@@ -5,20 +5,20 @@
  * turn locally with pi.sendUserMessage after it receives one of these.
  */
 
-export const NAMESPACE = "wassname/pi-supervise/v1";
+export const NAMESPACE = "wassname/pi-intercom-supervisor/v1";
 
 /**
  * Steer rounds allowed before the loop stops itself. Overnight runs cost money.
  * A bad value must crash here: NaN or Infinity would make `rounds >= cap` always false, which is a
  * cap that silently does nothing.
  */
-export const MAX_STEER_ROUNDS = readCap(process.env.PI_SUPERVISE_MAX_ROUNDS);
+export const MAX_STEER_ROUNDS = readCap(process.env.PI_SUPERVISOR_MAX_ROUNDS);
 
 export function readCap(raw: string | undefined): number {
   if (raw === undefined) return 20;
   const cap = Number(raw);
   if (!Number.isInteger(cap) || cap < 1) {
-    throw new Error(`PI_SUPERVISE_MAX_ROUNDS must be a whole number of 1 or more, got ${JSON.stringify(raw)}`);
+    throw new Error(`PI_SUPERVISOR_MAX_ROUNDS must be a whole number of 1 or more, got ${JSON.stringify(raw)}`);
   }
   return cap;
 }

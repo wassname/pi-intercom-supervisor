@@ -277,6 +277,59 @@ test("done unpairs the worker, so it stops publishing views", async () => {
   );
 });
 
+test("with no goal the supervisor cannot steer, it must ask the human", async () => {
+  // Seen in a real run: started with no goal, the supervisor invented a task for the worker.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "worker"); // no goal given
+
+  const result = await sup.tools.get("steer")!.execute("id", { message: "do something" }, undefined, undefined, sup.ctx);
+  assert.ok(result.isError, "steering with no goal must be refused");
+  assert.match(result.content[0].text, /No goal is set/);
+  assert.match(result.content[0].text, /asking the human/);
+});
+
+test("a goal given at pair time still allows steering", async () => {
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "worker make the results table");
+
+  const result = await sup.tools.get("steer")!.execute("id", { message: "read the log" }, undefined, undefined, sup.ctx);
+  assert.ok(!result.isError, `expected a steer to be allowed, got ${result.content[0].text}`);
+});
+
+test("done is refused while the worker has an unanswered tool call", async () => {
+  // A settled worker whose subagent call has no result is still spending. "done" would be a lie.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "worker finish the sweep");
+  sup.deliver(WORKER_ID, {
+    t: "view",
+    to: SUPER_ID,
+    view: "# Goal\nfinish the sweep\n\n# Worker\nstatus: idle\nturns: 3\noutstanding work: subagent\n",
+  });
+  await new Promise((r) => setTimeout(r, 5));
+
+  const blocked = await sup.tools.get("done")!.execute("id", { reason: "looks finished" }, undefined, undefined, sup.ctx);
+  assert.ok(blocked.isError, "done must be refused while work is outstanding");
+  assert.match(blocked.content[0].text, /outstanding work \(subagent\)/);
+});
+
+test("done is allowed once nothing is outstanding", async () => {
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "worker finish the sweep");
+  sup.deliver(WORKER_ID, {
+    t: "view",
+    to: SUPER_ID,
+    view: "# Goal\nfinish the sweep\n\n# Worker\nstatus: idle\nturns: 3\noutstanding work: none\n",
+  });
+  await new Promise((r) => setTimeout(r, 5));
+
+  const ok = await sup.tools.get("done")!.execute("id", { reason: "results.md line 3 says X" }, undefined, undefined, sup.ctx);
+  assert.ok(!ok.isError, `expected done to be allowed, got ${ok.content[0].text}`);
+});
+
 test("steer refuses when the session is not supervising", async () => {
   const lone = harness(SUPER_ID);
   await lone.start();

@@ -1,5 +1,5 @@
 /**
- * pi-supervise: a supervisor pi session watches a worker pi session and steers it.
+ * intercom-supervisor: a supervisor pi session watches a worker pi session and steers it.
  *
  * Load this extension in both sessions. Type /supervise <worker> in the supervisor.
  *
@@ -24,7 +24,7 @@ import {
   type SuperviseState,
   type Wire,
 } from "./protocol.ts";
-import { BRIEF, CAP_REACHED, REVIEW_NUDGE, loadSupervisorPrompt } from "./prompts.ts";
+import { BRIEF, CAP_REACHED, NO_GOAL, REVIEW_NUDGE, loadSupervisorPrompt } from "./prompts.ts";
 
 export default function (pi: any) {
   let channel: IntercomExtensionChannel | undefined;
@@ -33,9 +33,9 @@ export default function (pi: any) {
   let ctx: any;
   let ownId = "";
 
-  /** PI_SUPERVISE_DEBUG=1 traces the wire to stderr. The channel is invisible in transcripts. */
+  /** PI_SUPERVISOR_DEBUG=1 traces the wire to stderr. The channel is invisible in transcripts. */
   const debug = (event: string, detail: unknown = {}) => {
-    if (process.env.PI_SUPERVISE_DEBUG) console.error(`[pi-supervise] ${event} ${JSON.stringify(detail)}`);
+    if (process.env.PI_SUPERVISOR_DEBUG) console.error(`[intercom-supervisor] ${event} ${JSON.stringify(detail)}`);
   };
 
   function save() {
@@ -43,7 +43,7 @@ export default function (pi: any) {
   }
 
   function send(message: Wire) {
-    if (!channel) throw new Error("pi-supervise: intercom channel is not ready");
+    if (!channel) throw new Error("intercom-supervisor: intercom channel is not ready");
     channel.publish(message, { audience: "capable" });
   }
 
@@ -52,7 +52,7 @@ export default function (pi: any) {
     if (ownId) return ownId;
     const sessions = await channel!.listSessions();
     const mine = sessions.find((s: any) => s.pid === process.pid);
-    if (!mine) throw new Error("pi-supervise: this session is not registered with the intercom broker");
+    if (!mine) throw new Error("intercom-supervisor: this session is not registered with the intercom broker");
     ownId = mine.id;
     return ownId;
   }
@@ -113,7 +113,7 @@ export default function (pi: any) {
           // notice. resolveOwnId throws during a startup race.
           onWire(event.fromSessionId, event.payload).catch((err: Error) => {
             debug("wire dropped", { error: err.message });
-            ctx?.ui?.notify?.(`pi-supervise: dropped a message, ${err.message}`, "error");
+            ctx?.ui?.notify?.(`intercom-supervisor: dropped a message, ${err.message}`, "error");
           });
         }
       },
@@ -151,7 +151,7 @@ export default function (pi: any) {
       ctx = context;
       const text = args.trim();
       if (!channel) {
-        context.ui?.notify?.("pi-supervise: intercom is not connected", "error");
+        context.ui?.notify?.("intercom-supervisor: intercom is not connected", "error");
         return;
       }
       if (text === "stop" || text === "") {
@@ -169,7 +169,7 @@ export default function (pi: any) {
       const matches = sessions.filter((s: any) => s.id !== me && (s.id === target || s.name === target));
       if (matches.length !== 1) {
         const names = sessions.map((s: any) => `${s.name ?? "(unnamed)"} ${s.id.slice(0, 8)}`).join(", ");
-        context.ui?.notify?.(`pi-supervise: ${matches.length} sessions match "${target}". Seen: ${names}`, "error");
+        context.ui?.notify?.(`intercom-supervisor: ${matches.length} sessions match "${target}". Seen: ${names}`, "error");
         return;
       }
 
@@ -202,6 +202,10 @@ export default function (pi: any) {
       if (state.role !== "supervisor") {
         return { content: [{ type: "text", text: "Not supervising. Run /supervise <worker> first." }], isError: true };
       }
+      // No goal means no basis to steer. Inventing work is the observed failure, so ask instead.
+      if (!state.goal.trim()) {
+        return { content: [{ type: "text", text: NO_GOAL }], isError: true };
+      }
       if (state.steerRounds >= MAX_STEER_ROUNDS) {
         return { content: [{ type: "text", text: CAP_REACHED(state.steerRounds) }], isError: true };
       }
@@ -222,6 +226,15 @@ export default function (pi: any) {
     execute: async (_id: string, params: { reason: string }) => {
       if (state.role !== "supervisor") {
         return { content: [{ type: "text", text: "Not supervising." }], isError: true };
+      }
+      // "done" while a delegated tool call has no result is a false completion: the worker settled
+      // but its subagent or background job is still spending.
+      const pending = latestView.match(/^outstanding work: (?!none)(.+)$/m);
+      if (pending) {
+        return {
+          content: [{ type: "text", text: `Cannot finish: the worker still has outstanding work (${pending[1]}). Wait for the next view.` }],
+          isError: true,
+        };
       }
       send({ t: "done", to: state.pairedId, reason: params.reason });
       const rounds = state.steerRounds;

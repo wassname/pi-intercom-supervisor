@@ -1,4 +1,4 @@
-# pi-supervise
+# pi-intercom-supervisor
 
 A supervisor pi session watches a worker pi session and steers it, over pi-intercom.
 
@@ -24,7 +24,7 @@ it replies in plain text instead of calling a tool.
 For the phone, attach a chat bridge to the supervisor session, not the worker:
 
 ```
-pi -n supervisor -e /path/to/pi-supervise/src/index.ts   # plus @llblab/pi-telegram
+pi -n supervisor -e /path/to/pi-intercom-supervisor/src/index.ts   # plus @llblab/pi-telegram
 ```
 
 Then you are talking to the supervisor, which is read only if you launch it with `-t read,grep,list`.
@@ -52,13 +52,13 @@ own README calls session IDs "the trusted addressing key", so the trust level he
 running as you", the same as pi itself.
 
 Messages go out with `audience: "capable"`, which the broker routes to every session that loads
-pi-supervise, not only to the paired one. `wire.to` is a filter applied by the receiver. So a third
+this extension, not only to the paired one. `wire.to` is a filter applied by the receiver. So a third
 pi session with this extension loaded can read every view and every steer, and can send a `pair` to
 any worker that is not paired yet. On one machine, one user, that is the same trust level as the
 broker itself. Do not load this extension in a session you would not trust with the worker's
 transcript.
 
-`MAX_STEER_ROUNDS` (default 20, set `PI_SUPERVISE_MAX_ROUNDS`) stops an unattended loop. The count
+`MAX_STEER_ROUNDS` (default 20, set `PI_SUPERVISOR_MAX_ROUNDS`) stops an unattended loop. The count
 is written to session entries, so a compaction or a reload cannot reset it. A non-integer value
 throws at load, because `NaN` would make the cap silently never fire.
 
@@ -71,7 +71,7 @@ One difference: a verdict here is a tool call, not JSON, and the pairing brief s
 ```
 npm test                      # tier 1 and the fork fixture, no pi, no model, free
 npx tsx scripts/e2e.ts        # tier 3: two real pi processes and a real model, costs cents
-PI_SUPERVISE_DEBUG=1 pi ...   # trace the wire to stderr, since the channel is invisible
+PI_SUPERVISOR_DEBUG=1 pi ...   # trace the wire to stderr, since the channel is invisible
 ```
 
 `scripts/e2e.ts` writes its log to `docs/uat/`, which is not committed.

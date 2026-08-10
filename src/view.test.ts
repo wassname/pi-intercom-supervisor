@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MAX_VIEW_BYTES, buildView, filesTouched, problems, type Entry } from "./view.ts";
+import { MAX_VIEW_BYTES, buildView, filesTouched, outstandingWork, problems, type Entry } from "./view.ts";
 
 function assistant(text: string, calls: Array<{ name: string; args: Record<string, unknown> }> = []): Entry {
   return {
@@ -38,6 +38,31 @@ test("problems catches a tool error and a non-zero exit, ignores a clean result"
   assert.equal(found.length, 2);
   assert.match(found[0], /^bash exit 1:/);
   assert.match(found[1], /^read failed:/);
+});
+
+test("outstandingWork finds tool calls that never got a result", () => {
+  const answered: Entry = {
+    type: "message",
+    message: { role: "toolResult", toolName: "read", toolCallId: "call-1", content: [{ type: "text", text: "ok" }] },
+  };
+  const entries: Entry[] = [
+    { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "read" }] } },
+    answered,
+    { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "call-2", name: "subagent" }] } },
+  ];
+  assert.deepEqual(outstandingWork(entries), ["subagent"]);
+  assert.deepEqual(outstandingWork([entries[0], answered]), []);
+});
+
+test("buildView reports outstanding work so done can be refused", () => {
+  const busy = buildView({
+    goal: "g",
+    status: "idle",
+    entries: [{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "x", name: "subagent" }] } }],
+  });
+  assert.match(busy, /^outstanding work: subagent$/m);
+  const quiet = buildView({ goal: "g", status: "idle", entries: [assistant("all done")] });
+  assert.match(quiet, /^outstanding work: none$/m);
 });
 
 test("buildView reports the goal, the counts, and the problems", () => {

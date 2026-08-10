@@ -8,6 +8,7 @@
 /** Entry shapes we read. Only the fields this file touches, taken from real session jsonl. */
 export interface Block {
   type: string;
+  id?: string;
   text?: string;
   name?: string;
   arguments?: Record<string, unknown>;
@@ -16,6 +17,7 @@ export interface AgentMsg {
   role: "user" | "assistant" | "toolResult" | string;
   content?: string | Block[];
   toolName?: string;
+  toolCallId?: string;
   isError?: boolean;
 }
 export interface Entry {
@@ -48,6 +50,24 @@ function pathOf(args: Record<string, unknown> | undefined): string | undefined {
     if (typeof value === "string") return value;
   }
   return undefined;
+}
+
+/**
+ * Tool calls with no matching result on this branch. A settled worker with an unanswered
+ * subagent call still has delegated work running, and "done" then means nothing.
+ */
+export function outstandingWork(entries: Entry[]): string[] {
+  const called = new Map<string, string>();
+  const answered = new Set<string>();
+  for (const entry of entries) {
+    const msg = entry.message;
+    if (!msg) continue;
+    for (const b of blocks(msg)) {
+      if (b.type === "toolCall" && b.id) called.set(b.id, b.name ?? "?");
+    }
+    if (msg.role === "toolResult" && msg.toolCallId) answered.add(msg.toolCallId);
+  }
+  return [...called].filter(([id]) => !answered.has(id)).map(([, name]) => name);
 }
 
 /** Files the worker changed, most recent last, deduplicated. */
@@ -116,6 +136,7 @@ export function buildView({ goal, status, entries, recentTurns = 24 }: ViewInput
   const files = filesTouched(messages).slice(-12);
   const errors = problems(messages.slice(-40));
 
+  const pending = outstandingWork(messages);
   const head = [
     `# Goal`,
     (goal || "not set").slice(0, 2000),
@@ -123,6 +144,7 @@ export function buildView({ goal, status, entries, recentTurns = 24 }: ViewInput
     `# Worker`,
     `status: ${status}`,
     `turns: ${messages.length}`,
+    `outstanding work: ${pending.length ? pending.join(", ") : "none"}`,
     ``,
     `# Files touched`,
     files.length ? files.join("\n") : "none",

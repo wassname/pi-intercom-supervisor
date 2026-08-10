@@ -1,5 +1,5 @@
 {
-  "name": "@wassname2/pi-supervise",
+  "name": "@wassname2/pi-intercom-supervisor",
   "version": "0.0.1",
   "description": "pi extension: a supervisor pi session watches a worker pi session over pi-intercom, and steers it",
   "type": "module",
