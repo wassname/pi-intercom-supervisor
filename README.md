@@ -58,9 +58,16 @@ any worker that is not paired yet. On one machine, one user, that is the same tr
 broker itself. Do not load this extension in a session you would not trust with the worker's
 transcript.
 
-`MAX_STEER_ROUNDS` (default 20, set `PI_SUPERVISOR_MAX_ROUNDS`) stops an unattended loop. The count
-is written to session entries, so a compaction or a reload cannot reset it. A non-integer value
-throws at load, because `NaN` would make the cap silently never fire.
+There is no round limit and no budget, deliberately. Supervision runs until you type
+`/supervise stop`. Ending a run early is the failure this exists to prevent: at a fixed model,
+scaffolds that keep re-prompting scored 8.7% on MLE-bench against 0.8% for scaffolds that let the
+model stop (arXiv:2410.07095). A cap would be a competing stopping objective.
+
+Two guards remain, and both prevent a false ending rather than causing one. `steer` refuses while
+no goal is set, so the supervisor asks you or calls `set_goal` instead of inventing work. `done`
+refuses while the worker has a tool call with no result, so a running subagent cannot be declared
+finished. The goal, the pairing, the instruction count and the last few instructions are written to
+session entries, so a compaction or a reload keeps them.
 
 The supervisor policy comes from `<cwd>/.pi/SUPERVISOR.md`, then `<agent dir>/SUPERVISOR.md`, then a
 built-in default. That is the same precedence as pi-supervisor, so an existing file keeps working.
@@ -78,10 +85,14 @@ PI_SUPERVISOR_DEBUG=1 pi ...   # trace the wire to stderr, since the channel is 
 
 ## Known limits
 
-- The supervisor session is long lived, so its context grows with every review. pi-supervisor
-  rebuilt context from scratch each time to avoid this. We accept the growth because the supervisor
-  then remembers its own failed steers for free. Revisit if one overnight run needs more than one
-  supervisor compaction.
+- The supervisor session is long lived, so its context grows with every review. Measured at about
+  3.5 KB per review on a trivial worker, and a real worker view can reach 15 KB. Its own compaction
+  handles the tail, and the last few instructions are persisted outside the transcript so a
+  compaction cannot erase them. Not yet solved: the review prompt still carries the whole view.
+- The outstanding-work check only sees tool calls inside the session. A detached process, a queued
+  job or a training run that outlives the turn still reads as finished.
+- The supervisor only looks when the worker stops. A worker an hour down the wrong path is not
+  caught until it settles. pi-supervisor also watched mid-turn; this does not.
 - The first pair request wins. A second one is ignored, because there is nothing to authenticate it
   against.
 - Views are cut to 15 KB, under the channel's 16 KiB limit. The transcript is trimmed from the

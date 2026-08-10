@@ -25,26 +25,30 @@ Goal: ${goal || "infer it from the first view you receive"}
 Your verdict is a tool call, not text. Call steer, or call done. If the policy above tells you to
 reply with JSON, ignore that part: it belongs to a different supervisor and nothing parses it here.
 
+There is no round limit and no budget. Supervision runs until the human stops it. Ending early is
+the failure this exists to prevent, so never stop because it feels like enough.
+
 Do not act yet. The worker's view arrives when it stops. Reply with exactly: watching`;
 
-export const REVIEW_NUDGE = (view: string, roundsLeft: number) =>
+export const REVIEW_NUDGE = (view: string, rounds: number, recentSteers: string[]) =>
   `The worker stopped. Here is its view.
 
 ${view}
+${
+    recentSteers.length
+      ? `\nYou already sent these instructions, oldest first. Do not repeat one that did not work, change approach instead.\n${recentSteers.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n`
+      : ""
+  }
+This is review ${rounds + 1}. There is no round limit: supervision runs until the human stops it.
+Decide now. Call steer with one concrete next action, or call done if the goal is met. If you
+cannot decide without the human, say so in your reply instead of calling a tool, and say exactly
+what you need. Your reply reaches their phone.`;
 
-Decide now. Call steer with one concrete next action, or call done if the goal is met.
-Steer rounds left: ${roundsLeft}. If you cannot decide without the human, say so in your reply
-instead of calling a tool, and say exactly what you need.`;
-
-/** Refusal shown to the supervisor when it tries to steer with no goal set. */
+/** Refusal shown when the supervisor tries to steer with no goal set. */
 export const NO_GOAL = `No goal is set, so you must not steer or finish. Inventing a task is worse
-than doing nothing. Reply in plain text asking the human for the goal, and say what you can see of
-the worker. Your reply reaches their phone. The goal is set only by them, with
-/supervise <worker> <goal>.`;
-
-export const CAP_REACHED = (rounds: number) =>
-  `Steer cap reached after ${rounds} rounds. Stop steering. Report to the human what the worker
-achieved, what it did not, and the single decision you need from them.`;
+than doing nothing. Either call set_goal with the goal you infer from the worker's view, which
+tells the human what you chose, or reply in plain text asking them for it. Your reply reaches
+their phone.`;
 
 /**
  * Default supervisor prompt. A project SUPERVISOR.md overrides it, same as @monotykamary/pi-supervisor.

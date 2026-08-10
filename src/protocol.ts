@@ -7,21 +7,9 @@
 
 export const NAMESPACE = "wassname/pi-intercom-supervisor/v1";
 
-/**
- * Steer rounds allowed before the loop stops itself. Overnight runs cost money.
- * A bad value must crash here: NaN or Infinity would make `rounds >= cap` always false, which is a
- * cap that silently does nothing.
- */
-export const MAX_STEER_ROUNDS = readCap(process.env.PI_SUPERVISOR_MAX_ROUNDS);
-
-export function readCap(raw: string | undefined): number {
-  if (raw === undefined) return 20;
-  const cap = Number(raw);
-  if (!Number.isInteger(cap) || cap < 1) {
-    throw new Error(`PI_SUPERVISOR_MAX_ROUNDS must be a whole number of 1 or more, got ${JSON.stringify(raw)}`);
-  }
-  return cap;
-}
+// No round cap, no budget, on purpose. Supervision runs until the human stops it with
+// /supervise stop, because premature stopping is the failure this whole thing exists to prevent
+// (wassname's SUPERVISOR.md, citing arXiv:2410.07095: 8.7% vs 0.8% on MLE-bench).
 
 export type Wire =
   | { t: "pair"; to: string; goal: string }
@@ -48,9 +36,20 @@ export interface SuperviseState {
   pairedId: string;
   goal: string;
   steerRounds: number;
+  /** Recent steer texts, so the supervisor can see repetition after its own context is compacted. */
+  recentSteers: string[];
 }
 
-export const EMPTY_STATE: SuperviseState = { role: "none", pairedId: "", goal: "", steerRounds: 0 };
+export const EMPTY_STATE: SuperviseState = {
+  role: "none",
+  pairedId: "",
+  goal: "",
+  steerRounds: 0,
+  recentSteers: [],
+};
+
+/** How many past steers to keep and show back. Enough to spot a loop, small enough to stay cheap. */
+export const STEER_MEMORY = 6;
 
 /** Session entry type used to persist state, so a compaction or reload cannot reset the count. */
 export const STATE_ENTRY = "supervise-state";
@@ -60,7 +59,8 @@ export function restoreState(entries: Array<{ type: string; customType?: string;
   let state = EMPTY_STATE;
   for (const entry of entries) {
     if (entry.type === "custom" && entry.customType === STATE_ENTRY && entry.data) {
-      state = entry.data as SuperviseState;
+      // Merge over the defaults so a record written before a field existed still loads.
+      state = { ...EMPTY_STATE, ...(entry.data as Partial<SuperviseState>) };
     }
   }
   return state;

@@ -65,6 +65,57 @@ test("buildView reports outstanding work so done can be refused", () => {
   assert.match(quiet, /^outstanding work: none$/m);
 });
 
+test("an error is dropped once the same tool runs clean again", () => {
+  // Otherwise a failure the worker already fixed stays in the view for the rest of a multi-day run.
+  const stale = problems([
+    toolResult("bash", "3 failed\nexited with code 1"),
+    toolResult("bash", "all tests passed"),
+  ]);
+  assert.deepEqual(stale, [], "a later clean run of the same tool clears the old failure");
+
+  const live = problems([
+    toolResult("bash", "all tests passed"),
+    toolResult("bash", "3 failed\nexited with code 1"),
+  ]);
+  assert.equal(live.length, 1, "the newest failure is still reported");
+
+  const other = problems([toolResult("bash", "exit code 1"), toolResult("read", "fine")]);
+  assert.equal(other.length, 1, "a different tool running clean must not clear bash's failure");
+});
+
+test("the view carries the summary the worker's own compactor wrote", () => {
+  // This is where VCC's summary lands when VCC is the worker's compactor, so we read it rather
+  // than porting a summarisation pipeline into this extension.
+  const view = buildView({
+    goal: "g",
+    status: "idle",
+    entries: [
+      { type: "compaction", summary: "## Goal\n- build the dataset\n- earlier turns condensed here" },
+      assistant("carrying on"),
+    ],
+  });
+  assert.match(view, /# Earlier work, summarised by the worker's own compactor/);
+  assert.match(view, /build the dataset/);
+
+  const noCompaction = buildView({ goal: "g", status: "idle", entries: [assistant("hi")] });
+  assert.doesNotMatch(noCompaction, /Earlier work/);
+});
+
+test("bookkeeping tool calls are kept out of the transcript", () => {
+  const view = buildView({
+    goal: "g",
+    status: "idle",
+    entries: [
+      assistant("planning", [{ name: "TodoWrite", args: {} }]),
+      toolResult("TodoWrite", "todo list updated with 5 items"),
+      assistant("real work", [{ name: "edit", args: { path: "src/a.ts" } }]),
+    ],
+  });
+  assert.doesNotMatch(view, /TodoWrite/);
+  assert.doesNotMatch(view, /todo list updated/);
+  assert.match(view, /edit\(src\/a\.ts\)/);
+});
+
 test("buildView reports the goal, the counts, and the problems", () => {
   const view = buildView({
     goal: "make the table",

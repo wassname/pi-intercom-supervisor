@@ -23,6 +23,9 @@ export interface AgentMsg {
 export interface Entry {
   type: string;
   message?: AgentMsg;
+  /** Written by whichever compactor the worker runs. VCC's summary lands here too. */
+  summary?: string;
+  tokensBefore?: number;
 }
 
 /** Extension channel payloads cap at 16 KiB, so the view must stay under it. */
@@ -30,6 +33,17 @@ export const MAX_VIEW_BYTES = 15000;
 
 const WRITE_TOOLS = new Set(["edit", "write", "multi_edit", "apply_patch", "notebook_edit"]);
 const PATH_KEYS = ["path", "file_path", "filePath", "file"];
+
+/** Bookkeeping tools. Their calls and results say nothing about whether the goal is being met. */
+const NOISE_TOOLS = new Set([
+  "TodoWrite",
+  "TodoRead",
+  "ToolSearch",
+  "AskUser",
+  "todo_write",
+  "todo_read",
+  "tool_search",
+]);
 
 function blocks(msg: AgentMsg): Block[] {
   return Array.isArray(msg.content) ? msg.content : [];
@@ -88,36 +102,54 @@ export function filesTouched(entries: Entry[]): string[] {
 }
 
 /**
- * Errors the worker has not visibly resolved. A tool error or a non-zero exit is the evidence
- * that catches an agent claiming success while the output says otherwise.
+ * Errors the worker has not visibly moved past, most recent last.
+ *
+ * A later clean result from the same tool clears that tool's earlier errors. Without this, a
+ * failure the worker already fixed stays in the view for the rest of a multi-day run, and the
+ * supervisor keeps steering about a problem that is gone.
  */
 export function problems(entries: Entry[]): string[] {
-  const found: string[] = [];
+  const byTool = new Map<string, string[]>();
   for (const entry of entries) {
     const msg = entry.message;
     if (!msg || msg.role !== "toolResult") continue;
+    const tool = msg.toolName ?? "tool";
     const body = textOf(msg).trim();
-    if (msg.isError) {
-      found.push(`${msg.toolName ?? "tool"} failed: ${body.slice(0, 200)}`);
-      continue;
-    }
     const exit = body.match(/exit(?:ed with)? (?:code )?([1-9]\d*)/i);
-    if (exit) found.push(`${msg.toolName ?? "tool"} exit ${exit[1]}: ${body.slice(0, 200)}`);
+
+    if (msg.isError) {
+      byTool.set(tool, [...(byTool.get(tool) ?? []), `${tool} failed: ${body.slice(0, 200)}`]);
+    } else if (exit) {
+      byTool.set(tool, [...(byTool.get(tool) ?? []), `${tool} exit ${exit[1]}: ${body.slice(0, 200)}`]);
+    } else {
+      byTool.delete(tool); // this tool ran clean since, so its earlier errors are stale
+    }
   }
-  return found;
+  return [...byTool.values()].flat().slice(-8);
 }
 
+/** The summary written by whichever compactor the worker runs. Empty when it has not compacted. */
+export function compactionSummary(entries: Entry[]): string {
+  let summary = "";
+  for (const entry of entries) {
+    if (entry.type === "compaction" && entry.summary) summary = entry.summary;
+  }
+  return summary;
+}
+
+/** Thinking blocks never appear: only `text` blocks are read. Bookkeeping tools are dropped too. */
 function transcriptLine(msg: AgentMsg): string | undefined {
   if (msg.role === "user") return `USER: ${textOf(msg)}`;
   if (msg.role === "assistant") {
     const said = textOf(msg).trim();
     const calls = blocks(msg)
-      .filter((b) => b.type === "toolCall")
+      .filter((b) => b.type === "toolCall" && !NOISE_TOOLS.has(b.name ?? ""))
       .map((b) => `${b.name}(${pathOf(b.arguments) ?? ""})`);
     const parts = [said, calls.length ? `-> ${calls.join(" ")}` : ""].filter(Boolean);
     return parts.length ? `ASSISTANT: ${parts.join(" ")}` : undefined;
   }
   if (msg.role === "toolResult") {
+    if (NOISE_TOOLS.has(msg.toolName ?? "")) return undefined;
     return `TOOL ${msg.toolName ?? "?"}: ${textOf(msg).trim().slice(0, 300)}`;
   }
   return undefined;
@@ -134,13 +166,15 @@ export interface ViewInput {
 export function buildView({ goal, status, entries, recentTurns = 24 }: ViewInput): string {
   const messages = entries.filter((e) => e.type === "message" && e.message);
   const files = filesTouched(messages).slice(-12);
-  const errors = problems(messages.slice(-40));
+  const errors = problems(messages);
+  const earlier = compactionSummary(entries);
 
   const pending = outstandingWork(messages);
   const head = [
     `# Goal`,
     (goal || "not set").slice(0, 2000),
     ``,
+    ...(earlier ? [`# Earlier work, summarised by the worker's own compactor`, earlier.slice(0, 6000), ``] : []),
     `# Worker`,
     `status: ${status}`,
     `turns: ${messages.length}`,

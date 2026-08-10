@@ -3,17 +3,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { INTERCOM_EXTENSION_REGISTER_EVENT } from "pi-intercom/extension-api.ts";
 import extension from "./index.ts";
-import { MAX_STEER_ROUNDS, STATE_ENTRY, isWire, readCap, restoreState } from "./protocol.ts";
-
-test("a bad round cap crashes instead of becoming an infinite loop", () => {
-  assert.equal(readCap(undefined), 20);
-  assert.equal(readCap("5"), 5);
-  // Number("abc") is NaN and Number("1e999") is Infinity. Both make `rounds >= cap` always false,
-  // so the cap would silently never fire and an unattended run would go all night.
-  for (const bad of ["abc", "1e999", "0", "-3", "2.5", ""]) {
-    assert.throws(() => readCap(bad), /whole number/, `readCap(${JSON.stringify(bad)}) must throw`);
-  }
-});
+import { STATE_ENTRY, STEER_MEMORY, isWire, restoreState } from "./protocol.ts";
 
 test("a directive with no text is rejected, so the worker never sees undefined", () => {
   assert.equal(isWire({ t: "directive", to: "x", text: "do it" }), true);
@@ -215,46 +205,64 @@ test("an unpaired session publishes nothing on settle", async () => {
   assert.deepEqual(lone.published, []);
 });
 
-test("the steer cap stops the loop, and the count survives a reload", async () => {
+test("supervision never stops itself: no round limit at all", async () => {
+  // wassname: "I want no budget at all! I want long until human stops". Ending early is the
+  // failure this extension exists to prevent, so a cap would be a competing objective.
   const sup = harness(SUPER_ID);
   await sup.start();
   await sup.run("supervise", "worker do the thing");
 
   const steer = sup.tools.get("steer")!;
-  for (let i = 0; i < MAX_STEER_ROUNDS; i++) {
-    const result = await steer.execute("id", { message: `round ${i}` }, undefined, undefined, sup.ctx);
-    assert.ok(!result.isError, `round ${i} should be allowed`);
+  for (let i = 0; i < 200; i++) {
+    const result = await steer.execute("id", { message: `instruction ${i}` }, undefined, undefined, sup.ctx);
+    assert.ok(!result.isError, `instruction ${i} must be allowed, got ${result.content[0].text}`);
   }
-  const blocked = await steer.execute("id", { message: "one too many" }, undefined, undefined, sup.ctx);
-  assert.ok(blocked.isError, "the cap must refuse the next steer");
-  assert.match(blocked.content[0].text, /cap reached/i);
-
-  // The count is written to session entries, so a compaction or reload cannot reset it.
-  const persisted = sup.appended.filter((e) => e.type === STATE_ENTRY);
-  const restored = restoreState(persisted.map((e) => ({ type: "custom", customType: e.type, data: e.data })));
-  assert.equal(restored.steerRounds, MAX_STEER_ROUNDS);
-  assert.equal(restored.pairedId, WORKER_ID);
 });
 
-test("after a reload the cap still holds, because state comes back from session entries", async () => {
+test("goal, pairing and the steer count all survive a reload together", async () => {
   const first = harness(SUPER_ID);
   await first.start();
-  await first.run("supervise", "worker do the thing");
+  await first.run("supervise", "worker make the results table");
   const steer = first.tools.get("steer")!;
-  for (let i = 0; i < MAX_STEER_ROUNDS; i++) {
-    await steer.execute("id", { message: `round ${i}` }, undefined, undefined, first.ctx);
+  for (let i = 0; i < 3; i++) {
+    await steer.execute("id", { message: `instruction ${i}` }, undefined, undefined, first.ctx);
   }
 
-  // Restart the extension with the entries the first instance wrote, as a reload or compaction does.
-  const carried = first.appended.map((e) => ({ type: "custom", customType: e.type, data: e.data }));
-  const reloaded = harness(SUPER_ID, { entries: carried });
-  await reloaded.start();
+  const carried = first.appended
+    .filter((e) => e.type === STATE_ENTRY)
+    .map((e) => ({ type: "custom", customType: e.type, data: e.data }));
+  const restored = restoreState(carried);
+  assert.equal(restored.goal, "make the results table");
+  assert.equal(restored.pairedId, WORKER_ID);
+  assert.equal(restored.steerRounds, 3);
+  assert.deepEqual(restored.recentSteers, ["instruction 0", "instruction 1", "instruction 2"]);
+});
 
-  const afterReload = await reloaded.tools
-    .get("steer")!
-    .execute("id", { message: "sneak one in" }, undefined, undefined, reloaded.ctx);
-  assert.ok(afterReload.isError, "a reloaded session must not get a fresh budget of steers");
-  assert.match(afterReload.content[0].text, /cap reached/i);
+test("the supervisor is shown its recent instructions, so it can see a loop after compaction", async () => {
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "worker fix the tests");
+  const steer = sup.tools.get("steer")!;
+  for (let i = 0; i < STEER_MEMORY + 3; i++) {
+    await steer.execute("id", { message: `instruction ${i}` }, undefined, undefined, sup.ctx);
+  }
+
+  sup.userMessages.length = 0;
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal\nfix the tests\n\noutstanding work: none\n" });
+  await new Promise((r) => setTimeout(r, 5));
+
+  const nudge = sup.userMessages.at(-1)!.content;
+  assert.match(nudge, /You already sent these instructions/);
+  assert.match(nudge, /instruction 8/, "the newest instruction must be shown");
+  assert.doesNotMatch(nudge, /instruction 0\b/, "only the last few are kept");
+  assert.match(nudge, /no round limit/);
+});
+
+test("state written before recentSteers existed still loads", () => {
+  const old = [{ type: "custom", customType: STATE_ENTRY, data: { role: "supervisor", pairedId: "w", goal: "g", steerRounds: 4 } }];
+  const restored = restoreState(old);
+  assert.deepEqual(restored.recentSteers, []);
+  assert.equal(restored.steerRounds, 4);
 });
 
 test("done unpairs the worker, so it stops publishing views", async () => {
@@ -286,7 +294,25 @@ test("with no goal the supervisor cannot steer, it must ask the human", async ()
   const result = await sup.tools.get("steer")!.execute("id", { message: "do something" }, undefined, undefined, sup.ctx);
   assert.ok(result.isError, "steering with no goal must be refused");
   assert.match(result.content[0].text, /No goal is set/);
-  assert.match(result.content[0].text, /asking the human/);
+  assert.match(result.content[0].text, /set_goal/, "it must be told how to bind a goal it inferred");
+});
+
+test("set_goal binds an inferred goal, and steering then works", async () => {
+  // The human likes goal inference at startup, but a silently invented goal is what went wrong in
+  // his first run. So inference has to go through a tool that announces what it chose.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "worker"); // no goal
+
+  const set = await sup.tools
+    .get("set_goal")!
+    .execute("id", { goal: "print the numbers 1 to 3" }, undefined, undefined, sup.ctx);
+  assert.ok(!set.isError);
+  assert.match(set.content[0].text, /Tell the human/);
+  assert.ok(sup.notices.some((n) => n.includes("print the numbers 1 to 3")), "the human must be told");
+
+  const steer = await sup.tools.get("steer")!.execute("id", { message: "do it" }, undefined, undefined, sup.ctx);
+  assert.ok(!steer.isError, `steering should work once a goal is set, got ${steer.content[0].text}`);
 });
 
 test("a goal given at pair time still allows steering", async () => {

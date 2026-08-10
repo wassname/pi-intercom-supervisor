@@ -16,15 +16,15 @@ import {
 import { buildView } from "./view.ts";
 import {
   EMPTY_STATE,
-  MAX_STEER_ROUNDS,
   NAMESPACE,
   STATE_ENTRY,
+  STEER_MEMORY,
   isWire,
   restoreState,
   type SuperviseState,
   type Wire,
 } from "./protocol.ts";
-import { BRIEF, CAP_REACHED, NO_GOAL, REVIEW_NUDGE, loadSupervisorPrompt } from "./prompts.ts";
+import { BRIEF, NO_GOAL, REVIEW_NUDGE, loadSupervisorPrompt } from "./prompts.ts";
 
 export default function (pi: any) {
   let channel: IntercomExtensionChannel | undefined;
@@ -66,7 +66,7 @@ export default function (pi: any) {
 
     if (wire.t === "pair") {
       if (state.role !== "none") return; // first pairing wins; we cannot authenticate a second one
-      state = { role: "worker", pairedId: from, goal: wire.goal, steerRounds: 0 };
+      state = { ...EMPTY_STATE, role: "worker", pairedId: from, goal: wire.goal };
       save();
       ctx?.ui?.notify?.(`supervised by ${from.slice(0, 8)}: ${wire.goal}`, "info");
       return;
@@ -84,8 +84,7 @@ export default function (pi: any) {
 
     if (wire.t === "view" && state.role === "supervisor") {
       latestView = wire.view;
-      const left = MAX_STEER_ROUNDS - state.steerRounds;
-      pi.sendUserMessage(left > 0 ? REVIEW_NUDGE(wire.view, left) : CAP_REACHED(state.steerRounds));
+      pi.sendUserMessage(REVIEW_NUDGE(wire.view, state.steerRounds, state.recentSteers));
       return;
     }
 
@@ -173,7 +172,7 @@ export default function (pi: any) {
         return;
       }
 
-      state = { role: "supervisor", pairedId: matches[0].id, goal, steerRounds: 0 };
+      state = { ...EMPTY_STATE, role: "supervisor", pairedId: matches[0].id, goal };
       save();
       send({ t: "pair", to: state.pairedId, goal });
 
@@ -194,6 +193,29 @@ export default function (pi: any) {
   });
 
   pi.registerTool({
+    name: "set_goal",
+    label: "Set the goal",
+    description:
+      "Set the goal when the human did not give one. Infer it from the worker's view. This is announced to the human, who can override it.",
+    parameters: Type.Object({ goal: Type.String({ description: "One sentence, the outcome the worker must reach." }) }),
+    execute: async (_id: string, params: { goal: string }) => {
+      if (state.role !== "supervisor") {
+        return { content: [{ type: "text", text: "Not supervising." }], isError: true };
+      }
+      state = { ...state, goal: params.goal };
+      save();
+      // Announced, not silent: the supervisor's own reply is what reaches the human's phone.
+      ctx?.ui?.notify?.(`goal set by the supervisor: ${params.goal}`, "info");
+      return {
+        content: [{
+          type: "text",
+          text: `Goal set to: ${params.goal}\nTell the human this in your reply, so they can correct it.`,
+        }],
+      };
+    },
+  });
+
+  pi.registerTool({
     name: "steer",
     label: "Steer worker",
     description: "Send one concrete next action to the worker. It arrives as a user message in the worker session.",
@@ -206,15 +228,14 @@ export default function (pi: any) {
       if (!state.goal.trim()) {
         return { content: [{ type: "text", text: NO_GOAL }], isError: true };
       }
-      if (state.steerRounds >= MAX_STEER_ROUNDS) {
-        return { content: [{ type: "text", text: CAP_REACHED(state.steerRounds) }], isError: true };
-      }
       send({ t: "directive", to: state.pairedId, text: params.message });
-      state = { ...state, steerRounds: state.steerRounds + 1 };
-      save();
-      return {
-        content: [{ type: "text", text: `Steered. Round ${state.steerRounds} of ${MAX_STEER_ROUNDS}.` }],
+      state = {
+        ...state,
+        steerRounds: state.steerRounds + 1,
+        recentSteers: [...state.recentSteers, params.message].slice(-STEER_MEMORY),
       };
+      save();
+      return { content: [{ type: "text", text: `Steered. That is instruction ${state.steerRounds}.` }] };
     },
   });
 
