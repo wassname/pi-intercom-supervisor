@@ -10,6 +10,8 @@
  * track: unanswered tool calls, tool errors, and whether anything changed since the last review.
  */
 import { compile } from "@sting8k/pi-vcc/src/core/summarize.ts";
+import { normalize } from "@sting8k/pi-vcc/src/core/normalize.ts";
+import { extractFiles } from "@sting8k/pi-vcc/src/extract/files.ts";
 
 /** Entry shapes we read. Only the fields this file touches, taken from real session jsonl. */
 export interface Block {
@@ -104,16 +106,34 @@ export function compactionSummary(entries: Entry[]): string {
 }
 
 /**
- * What the worker changed, as pi-vcc reports it: files, commits, and the errors we found.
+ * What the worker has changed: the files it wrote, and the distinct errors it hit.
  *
  * Two reviews with the same key mean the last instruction moved nothing. That is evidence for the
  * supervisor, not a rule: re-editing one file while a test still fails looks the same, and is
  * sometimes the right thing to be doing.
+ *
+ * Read from pi-vcc's extractor rather than from its rendered section, which caps the list at ten
+ * paths and would freeze this key on any run long enough to matter. Errors are deduplicated,
+ * because the same test failing again is not a new error.
  */
 export function progressKey(entries: Entry[]): string {
-  const { headers } = vccSections(entries);
-  const sectionOf = (name: string) => headers.match(new RegExp(`\\[${name}\\]\\n([\\s\\S]*?)(\\n\\n|$)`))?.[1] ?? "";
-  return [sectionOf("Files And Changes"), sectionOf("Commits"), problems(entries).join("|")].join("||");
+  const files = extractFiles(normalize(messagesSince(entries) as any));
+  const distinct = [...new Set(problems(entries))].sort();
+  return [[...files.modified].sort().join(","), [...files.created].sort().join(","), distinct.join("|")].join("||");
+}
+
+/**
+ * Messages after the worker's last compaction.
+ *
+ * getBranch keeps the entries a compaction replaced, so handing every message to compile alongside
+ * the summary would send the supervisor both copies and spend the byte budget twice.
+ */
+function messagesSince(entries: Entry[]): AgentMsg[] {
+  const lastCompaction = entries.map((e) => e.type).lastIndexOf("compaction");
+  return entries
+    .slice(lastCompaction + 1)
+    .filter((e) => e.type === "message" && e.message)
+    .map((e) => e.message!);
 }
 
 const VCC_SEPARATOR = "\n\n---\n\n";
@@ -123,19 +143,23 @@ const VCC_HEADERS = ["Session Goal", "Files And Changes", "Commits", "Outstandin
 /**
  * pi-vcc's compiled summary, split into its header sections and its brief transcript.
  *
- * compile() writes `sections + "\n\n---\n\n" + brief`, and drops the sections entirely when it
- * extracted none, so a leading section name is what tells the two apart. Get this wrong and the
- * brief lands in the header, where the byte cut eats the newest turns instead of the oldest.
+ * compile() writes `sections + "\n\n---\n\n" + brief`, and drops either part when it is empty, so
+ * all four combinations are possible. Get this wrong and the header block lands in the transcript,
+ * where the byte cut eats the newest turns instead of the oldest.
  */
 function vccSections(entries: Entry[]): { headers: string; brief: string } {
-  const messages = entries.filter((e) => e.type === "message" && e.message).map((e) => e.message!);
+  // No previousSummary: compile's merge reads the fresh brief with briefOf, which finds nothing
+  // when the fresh messages produced no header sections, and the newest turns vanish. The
+  // compaction summary goes into the view above this instead, which loses nothing.
+  //
   // compile appends a note telling the reader to call vcc_recall, which the supervisor does not
   // have. Matched on the tool name because wrapLongLines rewraps the note before we see it.
-  const compiled = compile({ messages: messages as any, previousSummary: compactionSummary(entries) })
+  const compiled = compile({ messages: messagesSince(entries) as any })
     .replace(/\n*-*\n*Use `vcc_recall`[\s\S]*$/, "")
     .trim();
+  if (!VCC_HEADERS.some((h) => compiled.startsWith(`[${h}]`))) return { headers: "", brief: compiled };
   const at = compiled.indexOf(VCC_SEPARATOR);
-  if (at < 0 || !VCC_HEADERS.some((h) => compiled.startsWith(`[${h}]`))) return { headers: "", brief: compiled };
+  if (at < 0) return { headers: compiled, brief: "" };
   return { headers: compiled.slice(0, at), brief: compiled.slice(at + VCC_SEPARATOR.length) };
 }
 
@@ -153,6 +177,7 @@ export function buildView({ goal, status, entries, stale = 0 }: ViewInput): stri
   const errors = problems(messages);
   const pending = outstandingWork(messages);
   const { headers, brief } = vccSections(entries);
+  const earlier = compactionSummary(entries);
 
   const head = [
     `# Goal, as the human or the supervisor set it`,
@@ -167,7 +192,10 @@ export function buildView({ goal, status, entries, stale = 0 }: ViewInput): stri
     `# Problems`,
     errors.length ? errors.join("\n") : "none",
     ``,
-    `# Work so far, compiled by pi-vcc from the worker's compaction summary and every turn since`,
+    // The two sections meet at the compaction: the summary covers everything up to it, pi-vcc
+    // covers everything after. Nothing sits in a gap between them, and nothing is sent twice.
+    ...(earlier ? [`# Earlier work, summarised by the worker's own compactor`, earlier.slice(0, 6000), ``] : []),
+    `# Work since${earlier ? " that summary" : ""}, compiled by pi-vcc`,
     headers,
     ``,
     `# Recent turns`,

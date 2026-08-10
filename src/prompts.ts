@@ -37,7 +37,9 @@ ${view}
 ${
     recentSteers.length
       ? `\nYou already sent these instructions, oldest first. Before you repeat one, name what changed
-in the view that makes it worth another round. If nothing changed, change approach.\n${recentSteers.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n`
+in the view that makes it worth another round. If nothing changed, change approach.\n${
+          recentSteers.map((s, i) => `${rounds - recentSteers.length + i + 1}. ${s}`).join("\n")
+        }\n`
       : ""
   }
 You have sent ${rounds} instructions. There is no round limit: supervision runs until the human

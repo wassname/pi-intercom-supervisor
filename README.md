@@ -47,10 +47,11 @@ turn, so each side triggers its own turn locally with `pi.sendUserMessage`. That
 the worker's user and assistant trajectory, where it belongs.
 
 The view body is [pi-vcc](https://github.com/sting8k/pi-vcc)'s `compile()`, the same algorithmic
-compactor the worker can run as its own. We call it on the live branch with the worker's last
-compaction summary as `previousSummary`, so the view is the summary merged with every turn since,
-with no gap between them. On top of that the view carries what a compactor has no reason to track:
-tool calls with no result, tool errors, and whether anything changed since the last review.
+compactor the worker can run as its own. The two halves meet at the worker's last compaction: the
+compactor's own summary covers everything up to it, and pi-vcc compiles every message after it.
+Nothing sits in a gap between them, and nothing is sent twice. On top of that the view carries what
+a compactor has no reason to track: tool calls with no result, tool errors, and whether anything
+changed since the last review.
 
 Pairing is on `fromSessionId`, which the broker stamps from its own registry
 (`broker.ts:1247`), so a payload cannot forge it. The broker has no socket authentication, and its

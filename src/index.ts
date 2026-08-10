@@ -90,8 +90,14 @@ export default function (pi: any) {
       // Last pair wins. First-wins left a worker bound forever to a supervisor that had died, and
       // told nobody. The loser is told, so neither side waits on a pairing it does not have.
       if (state.pairedId && state.pairedId !== from) send({ t: "unpair", to: state.pairedId });
+      // We are a worker now, so any pair we sent as a supervisor is void. Leaving that timer armed
+      // would kill this healthy pairing ten seconds later, blaming a session no longer involved.
+      clearTimeout(pairTimer);
+      pairTimer = undefined;
       state = { ...EMPTY_STATE, role: "worker", pairedId: from, goal: wire.goal };
       latestView = "";
+      lastProgress = "";
+      staleReviews = 0;
       save();
       send({ t: "paired", to: from });
       ctx?.ui?.notify?.(`supervised by ${from.slice(0, 8)}: ${wire.goal}`, "info");
@@ -288,8 +294,11 @@ Tell them in your reply, quoting it, so they can correct it.`,
       }
       // Sent either way. Refusing a repeat would be a stopping rule, and a repeat is sometimes
       // right; the supervisor gets told so it can change approach on the next round.
+      // Numbered from the run's total, not from the position in the window, so the number here
+      // means the same thing as the one in the review nudge and in "that is instruction N".
+      const first = state.steerRounds - state.recentSteers.length + 1;
       const repeat = state.recentSteers
-        .map((old, i) => ({ old, i, score: overlap(old, params.message) }))
+        .map((old, i) => ({ old, n: first + i, score: overlap(old, params.message) }))
         .sort((a, b) => b.score - a.score)[0];
 
       send({ t: "directive", to: state.pairedId, text: params.message });
@@ -301,7 +310,7 @@ Tell them in your reply, quoting it, so they can correct it.`,
       save();
 
       const warning = repeat && repeat.score >= OVERLAP_WARN
-        ? `\nThis says much the same as instruction ${repeat.i + 1}: "${repeat.old}"\nIf the next view shows nothing new, say what evidence makes repeating it worth another round, or change approach.`
+        ? `\nThis says much the same as instruction ${repeat.n}: "${repeat.old}"\nIf the next view shows nothing new, say what evidence makes repeating it worth another round, or change approach.`
         : "";
       return { content: [{ type: "text", text: `Steered. That is instruction ${state.steerRounds}.${warning}` }] };
     },

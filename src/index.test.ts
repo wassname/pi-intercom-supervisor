@@ -344,6 +344,12 @@ test("set_goal binds an inferred goal, and steering then works", async () => {
   assert.ok(!set.isError);
   assert.match(set.content[0].text, /Tell them in your reply/);
   assert.ok(sup.notices.some((n) => n.includes("print the numbers 1 to 3")), "the human must be told");
+  // The worker owns the copy the view header is built from, so the goal has to go on the wire.
+  // Without this line the whole test passed while set_goal kept the goal to itself.
+  assert.deepEqual(
+    sup.published.filter((p) => p.t === "goal"),
+    [{ t: "goal", to: WORKER_ID, goal: "print the numbers 1 to 3" }],
+  );
 
   const steer = await sup.tools.get("steer")!.execute("id", { message: "do it" }, undefined, undefined, sup.ctx);
   assert.ok(!steer.isError, `steering should work once a goal is set, got ${steer.content[0].text}`);
@@ -466,4 +472,42 @@ test("the worker counts reviews in a row where nothing changed", async () => {
   const views = worker.published.filter((p) => p.t === "view");
   assert.doesNotMatch(views[0].view, /reviews in a row/, "the first review has nothing to compare against");
   assert.match(views[2].view, /no new file, commit or error for 2 reviews in a row/);
+
+  entries.push({
+    type: "message",
+    message: { role: "assistant", content: [{ type: "toolCall", id: "w", name: "write", arguments: { path: "results.md" } }] },
+  });
+  await worker.settle();
+  const after = worker.published.filter((p) => p.t === "view").at(-1)!;
+  assert.doesNotMatch(after.view, /reviews in a row/, "real work must clear the count, not just pause it");
+});
+
+test("an unacknowledged pair gives up, and a takeover cancels that timer", async (t) => {
+  // A supervisor waiting for an acknowledgment can itself be taken over as a worker. The timer it
+  // armed then fired against the new partner and blamed a session no longer involved.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+
+  const lonely = harness(SUPER_ID);
+  await lonely.start();
+  await lonely.run("supervise", "worker"); // nobody will acknowledge
+  t.mock.timers.tick(20_000);
+  assert.deepEqual(lonely.published.at(-1), { t: "unpair", to: WORKER_ID }, "it must let the worker go");
+  assert.match(lonely.notices.join("\n"), /never acknowledged/);
+
+  const takenOver = harness(WORKER_ID);
+  await takenOver.start();
+  await takenOver.run("supervise", "supervisor"); // arms a timer nobody will answer
+  takenOver.deliver("session-third", { t: "pair", to: WORKER_ID, goal: "g" });
+  await Promise.resolve();
+  const sent = takenOver.published.length;
+  t.mock.timers.tick(20_000);
+  assert.equal(takenOver.published.length, sent, "no unpair may go out after the takeover");
+
+  takenOver.deliver("session-third", { t: "directive", to: WORKER_ID, text: "carry on" });
+  await Promise.resolve();
+  assert.deepEqual(
+    takenOver.userMessages.filter((m) => m.content.startsWith("[supervisor]")).map((m) => m.content),
+    ["[supervisor] carry on"],
+    "the pairing must still work",
+  );
 });

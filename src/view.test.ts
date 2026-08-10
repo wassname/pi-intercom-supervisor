@@ -41,6 +41,20 @@ test("progressKey is unchanged when a review produced no new file, commit or err
   assert.notEqual(progressKey(wroteMore), progressKey(worked), "a new file is progress");
 });
 
+test("progressKey still sees a new file past pi-vcc's ten path display cap", () => {
+  // The rendered section stops at ten paths and says "(+N more)", so reading it there froze this
+  // key on exactly the long runs it exists for.
+  const many = (n: number) =>
+    Array.from({ length: n }, (_, i) => assistant("editing", [{ name: "edit", args: { path: `src/f${i}.ts` } }]));
+  assert.notEqual(progressKey(many(13)), progressKey(many(12)), "the 13th file must count as progress");
+});
+
+test("the same error hit again is not progress", () => {
+  // Otherwise a worker stuck rerunning one failing test resets the counter every review.
+  const failed = [toolResult("bash", "3 failed\nexited with code 1")];
+  assert.equal(progressKey([...failed, ...failed]), progressKey(failed));
+});
+
 test("problems catches a tool error and a non-zero exit, ignores a clean result", () => {
   const found = problems([
     toolResult("bash", "ok, all good"),
@@ -114,6 +128,38 @@ test("the view merges the worker's compaction summary with the turns after it", 
   });
   assert.match(view, /build the dataset/, "the summary from before the compaction survives");
   assert.match(view, /after\.md/, "so does the work done after it");
+});
+
+test("a turn the compaction summary already covers is not sent twice", () => {
+  // getBranch keeps the entries a compaction replaced, so passing all of them alongside the
+  // summary spends the byte budget on two copies of the same work.
+  const view = buildView({
+    goal: "g",
+    status: "idle",
+    entries: [
+      assistant("COVERED BY THE SUMMARY", [{ name: "edit", args: { path: "old.ts" } }]),
+      { type: "compaction", summary: "[Session Goal]\n- build the dataset" },
+      assistant("after the compaction"),
+    ],
+  });
+  assert.match(view, /build the dataset/);
+  assert.match(view, /after the compaction/);
+  assert.doesNotMatch(view, /COVERED BY THE SUMMARY/);
+});
+
+test("pi-vcc's sections and its transcript land on the right sides of the split", () => {
+  // compile() emits `sections + "\n\n---\n\n" + transcript`, and drops either part when it is
+  // empty. Splitting that wrong put the sections under "Recent turns", where the byte cut eats
+  // them from the top.
+  const view = buildView({
+    goal: "g",
+    status: "idle",
+    entries: [{ type: "message", message: { role: "user", content: "make the results table" } }],
+  });
+  const [above, below] = view.split("# Recent turns");
+  assert.match(above, /\[Session Goal\]/, "the sections belong above");
+  assert.match(below, /make the results table/, "the transcript belongs below");
+  assert.doesNotMatch(below, /\[Session Goal\]/);
 });
 
 test("the view does not tell the supervisor to use vcc_recall, a tool it does not have", () => {
