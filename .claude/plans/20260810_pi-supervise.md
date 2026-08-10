@@ -32,7 +32,6 @@ supervisor. Repo: ` /media/wassname/SGIronWolf/projects5/2026/pi-supervise `, pa
   - [x] escalation needs no tool: the supervisor replies in plain text, and your reply returns as a normal turn
   - failure modes: the bridge attaches to the worker, so your messages skip the supervisor and its read only limits
   - deliverable: BLOCKED on your phone and bot; everything else is built
-  - deliverable: a phone screenshot, and the worker jsonl line that the phone message produced
 
 ## UAT / Verification
 
@@ -72,5 +71,8 @@ Verified API facts this plan depends on:
 - pi-intercom wakes an idle session by default, `inboundTrigger: "always"` (`config.ts:52`)
 - the pi-intercom README calls session IDs "the trusted addressing key"
 
-Dropped from the gist: publishing the view on the intercom extension channel. A plain intercom
-message is one primitive instead of two. Add the channel if view size becomes a real problem.
+Changed during the build: I planned to drop the intercom extension channel and use plain intercom
+messages. I used the channel instead, because the plain message path injects a custom
+`intercom_message` and starts a turn on the receiver, which is the exact failure mode goal A
+guards against. The channel carries data without touching a transcript, so each side triggers its
+own turn locally and the steer stays a real user message. The gist was right and I was wrong.
