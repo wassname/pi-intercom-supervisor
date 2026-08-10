@@ -1,0 +1,24 @@
+{
+  "name": "@wassname2/pi-supervise",
+  "version": "0.0.1",
+  "description": "pi extension: a supervisor pi session watches a worker pi session over pi-intercom, and steers it",
+  "type": "module",
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "scripts": {
+    "test": "tsx --test src/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "pi-intercom": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "pi-intercom": "*",
+    "tsx": "*",
+    "typebox": "*"
+  },
+  "license": "MIT"
+}
