@@ -89,3 +89,42 @@ and a compaction can remove it, which is exactly what happens on the multi-day r
 
 The practical takeaway is that this extension should run until a human stops it, should summarise
 rather than truncate, and should keep only the guards that prevent a false ending.
+
+## 2026-08-11 -- both of my hedged readings were wrong, and how the tests hid it
+
+Later the same day wassname answered the two questions the entry above left open, and a fresh-eyes
+pass then found that two of the features I had just claimed to build did not work. This entry
+records what the evidence turned out to be.
+
+On the first reading, held at about 0.6, that his "compaction plus VCC" request did not mean
+importing a summarisation library: he answered "yes vcc". The cost I had priced in was wrong.
+pi-vcc's own README says it is an "Algorithmic conversation compactor ... No LLM calls", and its
+`compile()` is an ordinary exported function, so the dependency is a pure function call rather than
+a pipeline to port. Taking it removed the hand-written file tracker, noise filter and transcript
+renderer, so `src/view.ts` came out shorter than it went in.
+
+On the second reading, held at about 0.5, that the supervisor no longer needs stagnation detection:
+he asked for it, and an independent review had already ranked it. gpt-5.6-terra put "semantic
+instruction cycling" at 30% of multi-day waste, and observed that a window of six remembered
+instructions cannot stop a seven-step cycle, because at step seven the first has fallen out of the
+window. My interpretation, which I hold firmly, is that I was reasoning from what the supervisor
+could in principle notice rather than from what its context actually retains.
+
+The part worth remembering is how the first implementation failed. A subagent with no context was
+asked to refute four claims by mutating the production line each test targets. Deleting the one
+line that sends an inferred goal to the worker left all 41 tests passing, because the test had
+hand-delivered the wire message itself and never called the tool. Separately, the stagnation
+counter read pi-vcc's rendered file list, which stops at ten paths and appends "(+N more)", so its
+probe showed `n=10 -> n=11: FROZEN (new file invisible)`: the counter went blind on exactly the
+long runs it exists for, and no test noticed because no test had more than a handful of files.
+
+My reading, at about 0.85, is that a test written alongside the feature tends to assert the shape
+the author had in mind rather than the behaviour, and that mutating the line under test is the
+cheapest way to tell those apart. It cost one subagent and found two real defects that four
+external model reviews had missed.
+
+The measurements from this round, for anyone tuning them later: word overlap between one
+instruction and a rewording of it is about 0.44, against under 0.2 for two different instructions
+and 0 for a paraphrase sharing no vocabulary, so the 0.4 warning threshold is a floor on repetition
+and not a bound. The whole loop now rests on evidence the supervisor can see rather than on rules
+that stop it, which is the shape wassname asked for.
