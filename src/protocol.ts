@@ -13,6 +13,8 @@ export const NAMESPACE = "wassname/pi-intercom-supervisor/v1";
 
 export type Wire =
   | { t: "pair"; to: string; goal: string }
+  | { t: "paired"; to: string }
+  | { t: "goal"; to: string; goal: string }
   | { t: "view"; to: string; view: string }
   | { t: "directive"; to: string; text: string }
   | { t: "done"; to: string; reason: string }
@@ -23,12 +25,46 @@ export function isWire(payload: unknown): payload is Wire {
   if (typeof payload !== "object" || payload === null) return false;
   const { t, to, goal, view, text, reason } = payload as Record<string, unknown>;
   if (typeof to !== "string") return false;
-  if (t === "pair") return typeof goal === "string";
+  if (t === "pair" || t === "goal") return typeof goal === "string";
   if (t === "view") return typeof view === "string";
   if (t === "directive") return typeof text === "string" && text.trim().length > 0;
   if (t === "done") return typeof reason === "string";
-  return t === "unpair";
+  return t === "unpair" || t === "paired";
 }
+
+/**
+ * Words two instructions share, over the words either uses. Stopwords and short words dropped.
+ *
+ * Six remembered instructions do not stop repetition, because the same order rephrased reads as
+ * new. This catches the rephrasing that shares vocabulary; it cannot catch a true paraphrase.
+ */
+export function overlap(a: string, b: string): number {
+  const words = (s: string) =>
+    new Set(
+      s
+        .toLowerCase()
+        .split(/[^a-z0-9_./-]+/)
+        .filter((w) => w.length > 3 && !STOPWORDS.has(w)),
+    );
+  const [x, y] = [words(a), words(b)];
+  if (!x.size || !y.size) return 0;
+  const shared = [...x].filter((w) => y.has(w)).length;
+  return shared / (x.size + y.size - shared);
+}
+
+const STOPWORDS = new Set([
+  "then", "with", "that", "this", "from", "into", "your", "each", "have", "then", "should", "please",
+  "make", "sure", "also", "them", "they", "what", "when", "here", "there", "which", "will", "would",
+]);
+
+/**
+ * Two instructions sharing this much vocabulary get flagged back to the supervisor.
+ *
+ * Measured on rewordings of one instruction: about 0.44. On two different instructions: under 0.2.
+ * A true paraphrase that shares no words scores 0 and slips through, so this is a floor on
+ * repetition, not a bound.
+ */
+export const OVERLAP_WARN = 0.4;
 
 export interface SuperviseState {
   role: "none" | "worker" | "supervisor";

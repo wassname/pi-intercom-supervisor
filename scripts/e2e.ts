@@ -39,7 +39,7 @@ function startPi(name: string): Pi {
   const proc = spawn("pi", args, {
     cwd: root,
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, PI_SUPERVISE_DEBUG: "1" },
+    env: { ...process.env, PI_SUPERVISOR_DEBUG: "1" },
   });
 
   const events: any[] = [];

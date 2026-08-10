@@ -13,18 +13,23 @@ import {
   type IntercomExtensionChannel,
   type IntercomExtensionEvent,
 } from "pi-intercom/extension-api.ts";
-import { buildView } from "./view.ts";
+import { buildView, progressKey } from "./view.ts";
 import {
   EMPTY_STATE,
   NAMESPACE,
+  OVERLAP_WARN,
   STATE_ENTRY,
   STEER_MEMORY,
   isWire,
+  overlap,
   restoreState,
   type SuperviseState,
   type Wire,
 } from "./protocol.ts";
 import { BRIEF, NO_GOAL, REVIEW_NUDGE, loadSupervisorPrompt } from "./prompts.ts";
+
+/** How long the supervisor waits for the worker to acknowledge a pair before giving up on it. */
+const PAIR_ACK_TIMEOUT_MS = 10_000;
 
 export default function (pi: any) {
   let channel: IntercomExtensionChannel | undefined;
@@ -32,6 +37,11 @@ export default function (pi: any) {
   let latestView = "";
   let ctx: any;
   let ownId = "";
+  /** Worker side: the last progressKey, and how many reviews in a row have matched it. */
+  let lastProgress = "";
+  let staleReviews = 0;
+  /** Supervisor side: cleared when the worker acknowledges the pair. */
+  let pairTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** PI_SUPERVISOR_DEBUG=1 traces the wire to stderr. The channel is invisible in transcripts. */
   const debug = (event: string, detail: unknown = {}) => {
@@ -57,6 +67,18 @@ export default function (pi: any) {
     return ownId;
   }
 
+  /** Everything that ends a pairing goes through here, so no stale view or timer survives it. */
+  function reset(note: string) {
+    clearTimeout(pairTimer);
+    pairTimer = undefined;
+    state = { ...EMPTY_STATE };
+    latestView = "";
+    lastProgress = "";
+    staleReviews = 0;
+    save();
+    ctx?.ui?.notify?.(note, "info");
+  }
+
   // ---- inbound, one branch per role ------------------------------------------------------
 
   async function onWire(from: string, wire: Wire) {
@@ -65,14 +87,33 @@ export default function (pi: any) {
     if (wire.to !== me) return;
 
     if (wire.t === "pair") {
-      if (state.role !== "none") return; // first pairing wins; we cannot authenticate a second one
+      // Last pair wins. First-wins left a worker bound forever to a supervisor that had died, and
+      // told nobody. The loser is told, so neither side waits on a pairing it does not have.
+      if (state.pairedId && state.pairedId !== from) send({ t: "unpair", to: state.pairedId });
       state = { ...EMPTY_STATE, role: "worker", pairedId: from, goal: wire.goal };
+      latestView = "";
       save();
+      send({ t: "paired", to: from });
       ctx?.ui?.notify?.(`supervised by ${from.slice(0, 8)}: ${wire.goal}`, "info");
       return;
     }
 
     if (from !== state.pairedId) return; // ignore anything from a session we are not paired with
+
+    if (wire.t === "paired" && state.role === "supervisor") {
+      clearTimeout(pairTimer);
+      pairTimer = undefined;
+      return;
+    }
+
+    if (wire.t === "goal" && state.role === "worker") {
+      // The supervisor inferred a goal. The worker holds the copy the view header is built from,
+      // so without this the header says "not set" for the rest of the run.
+      state = { ...state, goal: wire.goal };
+      save();
+      ctx?.ui?.notify?.(`goal set by the supervisor: ${wire.goal}`, "info");
+      return;
+    }
 
     if (wire.t === "directive" && state.role === "worker") {
       // Busy worker gets "steer": delivered after the current tool calls, before the next LLM call.
@@ -89,9 +130,7 @@ export default function (pi: any) {
     }
 
     if (wire.t === "done" || wire.t === "unpair") {
-      state = { ...EMPTY_STATE };
-      save();
-      ctx?.ui?.notify?.(`supervision ended: ${wire.t === "done" ? wire.reason : "unpaired"}`, "info");
+      reset(`supervision ended: ${wire.t === "done" ? wire.reason : "unpaired"}`);
     }
   }
 
@@ -129,16 +168,18 @@ export default function (pi: any) {
     debug("agent_settled", { role: state.role, hasChannel: Boolean(channel) });
     if (state.role !== "worker" || !channel) return;
     try {
-      const view = buildView({
-        goal: state.goal,
-        status: "idle",
-        entries: context.sessionManager.getBranch() as any,
-      });
+      const entries = context.sessionManager.getBranch() as any;
+      const progress = progressKey(entries);
+      staleReviews = progress === lastProgress ? staleReviews + 1 : 0;
+      lastProgress = progress;
+      const view = buildView({ goal: state.goal, status: "idle", entries, stale: staleReviews });
       send({ t: "view", to: state.pairedId, view });
-      debug("published view", { bytes: Buffer.byteLength(view), to: state.pairedId });
+      debug("published view", { bytes: Buffer.byteLength(view), to: state.pairedId, stale: staleReviews });
     } catch (err) {
+      // Nothing awaits this handler, so rethrowing would be an unhandled rejection nobody sees,
+      // and the supervisor would silently never wake again.
       debug("view publish failed", { error: (err as Error).message });
-      throw err;
+      context.ui?.notify?.(`intercom-supervisor: could not send the view, ${(err as Error).message}`, "error");
     }
   });
 
@@ -155,9 +196,14 @@ export default function (pi: any) {
       }
       if (text === "stop" || text === "") {
         if (state.pairedId) send({ t: "unpair", to: state.pairedId });
-        state = { ...EMPTY_STATE };
-        save();
-        context.ui?.notify?.("supervision stopped", "info");
+        reset("supervision stopped");
+        return;
+      }
+      if (state.role !== "none") {
+        context.ui?.notify?.(
+          `intercom-supervisor: already paired with ${state.pairedId.slice(0, 8)} as ${state.role}. Run /supervise stop first.`,
+          "error",
+        );
         return;
       }
 
@@ -173,8 +219,17 @@ export default function (pi: any) {
       }
 
       state = { ...EMPTY_STATE, role: "supervisor", pairedId: matches[0].id, goal };
+      latestView = "";
       save();
       send({ t: "pair", to: state.pairedId, goal });
+      // No acknowledgment means the target does not load this extension, or it went away between
+      // listSessions and now. Without this the supervisor waits forever for a view and says nothing.
+      pairTimer = setTimeout(() => {
+        // Unpair first, in case the worker did pair and only the acknowledgment went missing.
+        // Otherwise it would keep publishing views to a supervisor that has already given up.
+        send({ t: "unpair", to: state.pairedId });
+        reset(`intercom-supervisor: ${target} never acknowledged. It probably does not load this extension.`);
+      }, PAIR_ACK_TIMEOUT_MS);
 
       const { prompt, source } = loadSupervisorPrompt(context.cwd);
       pi.sendUserMessage(BRIEF(prompt, goal, matches[0].name ?? state.pairedId.slice(0, 8)));
@@ -204,12 +259,15 @@ export default function (pi: any) {
       }
       state = { ...state, goal: params.goal };
       save();
+      // The worker holds the copy every view header is built from, so it has to hear this too.
+      send({ t: "goal", to: state.pairedId, goal: params.goal });
       // Announced, not silent: the supervisor's own reply is what reaches the human's phone.
       ctx?.ui?.notify?.(`goal set by the supervisor: ${params.goal}`, "info");
       return {
         content: [{
           type: "text",
-          text: `Goal set to: ${params.goal}\nTell the human this in your reply, so they can correct it.`,
+          text: `Goal set to: ${params.goal}\nThis is a goal you inferred, not one the human gave you.
+Tell them in your reply, quoting it, so they can correct it.`,
         }],
       };
     },
@@ -228,6 +286,12 @@ export default function (pi: any) {
       if (!state.goal.trim()) {
         return { content: [{ type: "text", text: NO_GOAL }], isError: true };
       }
+      // Sent either way. Refusing a repeat would be a stopping rule, and a repeat is sometimes
+      // right; the supervisor gets told so it can change approach on the next round.
+      const repeat = state.recentSteers
+        .map((old, i) => ({ old, i, score: overlap(old, params.message) }))
+        .sort((a, b) => b.score - a.score)[0];
+
       send({ t: "directive", to: state.pairedId, text: params.message });
       state = {
         ...state,
@@ -235,7 +299,11 @@ export default function (pi: any) {
         recentSteers: [...state.recentSteers, params.message].slice(-STEER_MEMORY),
       };
       save();
-      return { content: [{ type: "text", text: `Steered. That is instruction ${state.steerRounds}.` }] };
+
+      const warning = repeat && repeat.score >= OVERLAP_WARN
+        ? `\nThis says much the same as instruction ${repeat.i + 1}: "${repeat.old}"\nIf the next view shows nothing new, say what evidence makes repeating it worth another round, or change approach.`
+        : "";
+      return { content: [{ type: "text", text: `Steered. That is instruction ${state.steerRounds}.${warning}` }] };
     },
   });
 
@@ -249,19 +317,19 @@ export default function (pi: any) {
         return { content: [{ type: "text", text: "Not supervising." }], isError: true };
       }
       // "done" while a delegated tool call has no result is a false completion: the worker settled
-      // but its subagent or background job is still spending.
-      const pending = latestView.match(/^outstanding work: (?!none)(.+)$/m);
+      // but its subagent or background job is still spending. This proves only that no tracked
+      // tool result is missing. A detached process is invisible to it.
+      const pending = latestView.match(/^tool calls with no result: (?!none)(.+)$/m);
       if (pending) {
         return {
-          content: [{ type: "text", text: `Cannot finish: the worker still has outstanding work (${pending[1]}). Wait for the next view.` }],
+          content: [{ type: "text", text: `Cannot finish: the worker has a tool call with no result yet (${pending[1]}). Wait for the next view.` }],
           isError: true,
         };
       }
       send({ t: "done", to: state.pairedId, reason: params.reason });
       const rounds = state.steerRounds;
-      state = { ...EMPTY_STATE };
-      save();
-      return { content: [{ type: "text", text: `Supervision finished after ${rounds} steer rounds.` }] };
+      reset(`supervision finished: ${params.reason}`);
+      return { content: [{ type: "text", text: `Supervision finished after ${rounds} instructions.` }] };
     },
   });
 }

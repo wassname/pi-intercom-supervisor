@@ -36,12 +36,13 @@ export const REVIEW_NUDGE = (view: string, rounds: number, recentSteers: string[
 ${view}
 ${
     recentSteers.length
-      ? `\nYou already sent these instructions, oldest first. Do not repeat one that did not work, change approach instead.\n${recentSteers.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n`
+      ? `\nYou already sent these instructions, oldest first. Before you repeat one, name what changed
+in the view that makes it worth another round. If nothing changed, change approach.\n${recentSteers.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n`
       : ""
   }
-This is review ${rounds + 1}. There is no round limit: supervision runs until the human stops it.
-Decide now. Call steer with one concrete next action, or call done if the goal is met. If you
-cannot decide without the human, say so in your reply instead of calling a tool, and say exactly
+You have sent ${rounds} instructions. There is no round limit: supervision runs until the human
+stops it. Decide now. Call steer with one concrete next action, or call done if the goal is met. If
+you cannot decide without the human, say so in your reply instead of calling a tool, and say exactly
 what you need. Your reply reaches their phone.`;
 
 /** Refusal shown when the supervisor tries to steer with no goal set. */
@@ -62,6 +63,11 @@ Judge from the view only. You cannot see the worker's files unless you read them
 Call steer when the work is incomplete, when the worker asked a question you can answer with a
 sensible default, or when it claims success without evidence. One concrete next action per steer.
 Never repeat a steer that had no effect; change the approach instead.
+
+The view line "no new file, commit or error for N reviews in a row" means your last N instructions
+moved nothing the worker's session can show. Two or more is your signal to change approach, ask the
+human, or check whether the goal is already met. Sometimes it is honest work on one file, so read
+the recent turns before you decide.
 
 Call done only when all of these hold:
 1. the worker named the artifact file it produced, with a path
