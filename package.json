@@ -10,6 +10,9 @@
     "pretest": "tsx scripts/make-fixture.ts",
     "test": "tsx --test src/*.test.ts"
   },
+  "dependencies": {
+    "@sting8k/pi-vcc": "^0.5.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "pi-intercom": "*",

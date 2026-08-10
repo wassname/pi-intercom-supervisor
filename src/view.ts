@@ -2,8 +2,14 @@
  * The worker view: what the supervisor judges from.
  *
  * Built from ctx.sessionManager.getBranch(), which already follows the live leaf path, so a fork
- * or a rewind cannot leave dead entries in here.
+ * or a rewind cannot leave dead entries in here. There is no disk read and no cross-branch merge.
+ *
+ * The body is pi-vcc's compiler, the same algorithmic compactor the worker can run, called here on
+ * the live messages with the worker's last compaction summary as previousSummary. So the view is
+ * "compaction summary, merged with everything since". We add what a compactor has no reason to
+ * track: unanswered tool calls, tool errors, and whether anything changed since the last review.
  */
+import { compile } from "@sting8k/pi-vcc/src/core/summarize.ts";
 
 /** Entry shapes we read. Only the fields this file touches, taken from real session jsonl. */
 export interface Block {
@@ -31,20 +37,6 @@ export interface Entry {
 /** Extension channel payloads cap at 16 KiB, so the view must stay under it. */
 export const MAX_VIEW_BYTES = 15000;
 
-const WRITE_TOOLS = new Set(["edit", "write", "multi_edit", "apply_patch", "notebook_edit"]);
-const PATH_KEYS = ["path", "file_path", "filePath", "file"];
-
-/** Bookkeeping tools. Their calls and results say nothing about whether the goal is being met. */
-const NOISE_TOOLS = new Set([
-  "TodoWrite",
-  "TodoRead",
-  "ToolSearch",
-  "AskUser",
-  "todo_write",
-  "todo_read",
-  "tool_search",
-]);
-
 function blocks(msg: AgentMsg): Block[] {
   return Array.isArray(msg.content) ? msg.content : [];
 }
@@ -55,15 +47,6 @@ function textOf(msg: AgentMsg): string {
     .filter((b) => b.type === "text")
     .map((b) => b.text ?? "")
     .join("\n");
-}
-
-function pathOf(args: Record<string, unknown> | undefined): string | undefined {
-  if (!args) return undefined;
-  for (const key of PATH_KEYS) {
-    const value = args[key];
-    if (typeof value === "string") return value;
-  }
-  return undefined;
 }
 
 /**
@@ -82,23 +65,6 @@ export function outstandingWork(entries: Entry[]): string[] {
     if (msg.role === "toolResult" && msg.toolCallId) answered.add(msg.toolCallId);
   }
   return [...called].filter(([id]) => !answered.has(id)).map(([, name]) => name);
-}
-
-/** Files the worker changed, most recent last, deduplicated. */
-export function filesTouched(entries: Entry[]): string[] {
-  const seen: string[] = [];
-  for (const entry of entries) {
-    if (!entry.message) continue;
-    for (const b of blocks(entry.message)) {
-      if (b.type !== "toolCall" || !b.name || !WRITE_TOOLS.has(b.name)) continue;
-      const path = pathOf(b.arguments);
-      if (!path) continue;
-      const at = seen.indexOf(path);
-      if (at >= 0) seen.splice(at, 1);
-      seen.push(path);
-    }
-  }
-  return seen;
 }
 
 /**
@@ -137,72 +103,85 @@ export function compactionSummary(entries: Entry[]): string {
   return summary;
 }
 
-/** Thinking blocks never appear: only `text` blocks are read. Bookkeeping tools are dropped too. */
-function transcriptLine(msg: AgentMsg): string | undefined {
-  if (msg.role === "user") return `USER: ${textOf(msg)}`;
-  if (msg.role === "assistant") {
-    const said = textOf(msg).trim();
-    const calls = blocks(msg)
-      .filter((b) => b.type === "toolCall" && !NOISE_TOOLS.has(b.name ?? ""))
-      .map((b) => `${b.name}(${pathOf(b.arguments) ?? ""})`);
-    const parts = [said, calls.length ? `-> ${calls.join(" ")}` : ""].filter(Boolean);
-    return parts.length ? `ASSISTANT: ${parts.join(" ")}` : undefined;
-  }
-  if (msg.role === "toolResult") {
-    if (NOISE_TOOLS.has(msg.toolName ?? "")) return undefined;
-    return `TOOL ${msg.toolName ?? "?"}: ${textOf(msg).trim().slice(0, 300)}`;
-  }
-  return undefined;
+/**
+ * What the worker changed, as pi-vcc reports it: files, commits, and the errors we found.
+ *
+ * Two reviews with the same key mean the last instruction moved nothing. That is evidence for the
+ * supervisor, not a rule: re-editing one file while a test still fails looks the same, and is
+ * sometimes the right thing to be doing.
+ */
+export function progressKey(entries: Entry[]): string {
+  const { headers } = vccSections(entries);
+  const sectionOf = (name: string) => headers.match(new RegExp(`\\[${name}\\]\\n([\\s\\S]*?)(\\n\\n|$)`))?.[1] ?? "";
+  return [sectionOf("Files And Changes"), sectionOf("Commits"), problems(entries).join("|")].join("||");
+}
+
+const VCC_SEPARATOR = "\n\n---\n\n";
+/** pi-vcc's section names, in the order formatSummary writes them (its format.ts). */
+const VCC_HEADERS = ["Session Goal", "Files And Changes", "Commits", "Outstanding Context", "User Preferences"];
+
+/**
+ * pi-vcc's compiled summary, split into its header sections and its brief transcript.
+ *
+ * compile() writes `sections + "\n\n---\n\n" + brief`, and drops the sections entirely when it
+ * extracted none, so a leading section name is what tells the two apart. Get this wrong and the
+ * brief lands in the header, where the byte cut eats the newest turns instead of the oldest.
+ */
+function vccSections(entries: Entry[]): { headers: string; brief: string } {
+  const messages = entries.filter((e) => e.type === "message" && e.message).map((e) => e.message!);
+  // compile appends a note telling the reader to call vcc_recall, which the supervisor does not
+  // have. Matched on the tool name because wrapLongLines rewraps the note before we see it.
+  const compiled = compile({ messages: messages as any, previousSummary: compactionSummary(entries) })
+    .replace(/\n*-*\n*Use `vcc_recall`[\s\S]*$/, "")
+    .trim();
+  const at = compiled.indexOf(VCC_SEPARATOR);
+  if (at < 0 || !VCC_HEADERS.some((h) => compiled.startsWith(`[${h}]`))) return { headers: "", brief: compiled };
+  return { headers: compiled.slice(0, at), brief: compiled.slice(at + VCC_SEPARATOR.length) };
 }
 
 export interface ViewInput {
   goal: string;
   status: string;
   entries: Entry[];
-  recentTurns?: number;
+  /** Reviews in a row where progressKey did not change. 0 means something changed this time. */
+  stale?: number;
 }
 
-/** Render the view. Trims the transcript from the front until it fits MAX_VIEW_BYTES. */
-export function buildView({ goal, status, entries, recentTurns = 24 }: ViewInput): string {
+/** Render the view, and cut it to MAX_VIEW_BYTES so the broker cannot reject it. */
+export function buildView({ goal, status, entries, stale = 0 }: ViewInput): string {
   const messages = entries.filter((e) => e.type === "message" && e.message);
-  const files = filesTouched(messages).slice(-12);
   const errors = problems(messages);
-  const earlier = compactionSummary(entries);
-
   const pending = outstandingWork(messages);
+  const { headers, brief } = vccSections(entries);
+
   const head = [
-    `# Goal`,
+    `# Goal, as the human or the supervisor set it`,
     (goal || "not set").slice(0, 2000),
     ``,
-    ...(earlier ? [`# Earlier work, summarised by the worker's own compactor`, earlier.slice(0, 6000), ``] : []),
     `# Worker`,
     `status: ${status}`,
     `turns: ${messages.length}`,
-    `outstanding work: ${pending.length ? pending.join(", ") : "none"}`,
-    ``,
-    `# Files touched`,
-    files.length ? files.join("\n") : "none",
+    `tool calls with no result: ${pending.length ? pending.join(", ") : "none"}`,
+    ...(stale > 0 ? [`no new file, commit or error for ${stale} reviews in a row`] : []),
     ``,
     `# Problems`,
     errors.length ? errors.join("\n") : "none",
     ``,
-    `# Recent conversation`,
+    `# Work so far, compiled by pi-vcc from the worker's compaction summary and every turn since`,
+    headers,
+    ``,
+    `# Recent turns`,
   ].join("\n");
 
-  let lines = messages
-    .slice(-recentTurns)
-    .map((e) => transcriptLine(e.message!))
-    .filter((line): line is string => Boolean(line));
-
+  // Oldest brief lines go first, because the newest turns are what the next instruction rests on.
+  let lines = brief.split("\n");
   let view = `${head}\n${lines.join("\n")}\n`;
   while (Buffer.byteLength(view, "utf-8") > MAX_VIEW_BYTES && lines.length > 1) {
     lines = lines.slice(1);
-    view = `${head}\n[earlier turns trimmed]\n${lines.join("\n")}\n`;
+    view = `${head}\n[earlier turns cut to fit the channel]\n${lines.join("\n")}\n`;
   }
-  // The head can still be long on its own (many files, many problems). The broker rejects anything
-  // over 16 KiB and the extension never hears about it, so cut hard rather than go blind.
-  if (Buffer.byteLength(view, "utf-8") > MAX_VIEW_BYTES) {
-    view = `${Buffer.from(view, "utf-8").subarray(0, MAX_VIEW_BYTES - 20).toString("utf-8")}\n[view truncated]\n`;
-  }
-  return view;
+  if (Buffer.byteLength(view, "utf-8") <= MAX_VIEW_BYTES) return view;
+  // The head alone can overflow, on a long goal or many problems. The broker drops anything over
+  // 16 KiB and never tells the extension, so the supervisor would go blind. Cut, and say so.
+  return `${Buffer.from(view, "utf-8").subarray(0, MAX_VIEW_BYTES - 40).toString("utf-8")}\n[view cut here to fit the channel]\n`;
 }

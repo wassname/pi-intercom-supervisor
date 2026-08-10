@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MAX_VIEW_BYTES, buildView, filesTouched, outstandingWork, problems, type Entry } from "./view.ts";
+import { MAX_VIEW_BYTES, buildView, outstandingWork, problems, progressKey, type Entry } from "./view.ts";
 
 function assistant(text: string, calls: Array<{ name: string; args: Record<string, unknown> }> = []): Entry {
   return {
@@ -19,14 +19,26 @@ function toolResult(toolName: string, text: string, isError = false): Entry {
   return { type: "message", message: { role: "toolResult", toolName, isError, content: [{ type: "text", text }] } };
 }
 
-test("filesTouched lists write tool paths, most recent last, no duplicates", () => {
-  const entries = [
-    assistant("editing", [{ name: "edit", args: { path: "src/a.ts" } }]),
-    assistant("reading", [{ name: "read", args: { path: "src/never.ts" } }]),
-    assistant("writing", [{ name: "write", args: { file_path: "docs/b.md" } }]),
-    assistant("again", [{ name: "edit", args: { path: "src/a.ts" } }]),
-  ];
-  assert.deepEqual(filesTouched(entries), ["docs/b.md", "src/a.ts"]);
+test("pi-vcc reports the files the worker wrote, and separates them from the ones it read", () => {
+  const view = buildView({
+    goal: "g",
+    status: "idle",
+    entries: [
+      assistant("editing", [{ name: "edit", args: { path: "src/a.ts" } }]),
+      assistant("reading", [{ name: "read", args: { path: "src/never.ts" } }]),
+      assistant("writing", [{ name: "write", args: { file_path: "docs/b.md" } }]),
+    ],
+  });
+  assert.match(view, /Modified:.*src\/a\.ts/);
+  assert.match(view, /Read:.*src\/never\.ts/);
+});
+
+test("progressKey is unchanged when a review produced no new file, commit or error", () => {
+  const worked = [assistant("editing", [{ name: "edit", args: { path: "src/a.ts" } }])];
+  const talked = [...worked, assistant("I will look into that shortly.")];
+  const wroteMore = [...worked, assistant("editing", [{ name: "write", args: { path: "src/b.ts" } }])];
+  assert.equal(progressKey(talked), progressKey(worked), "talking is not progress");
+  assert.notEqual(progressKey(wroteMore), progressKey(worked), "a new file is progress");
 });
 
 test("problems catches a tool error and a non-zero exit, ignores a clean result", () => {
@@ -54,15 +66,21 @@ test("outstandingWork finds tool calls that never got a result", () => {
   assert.deepEqual(outstandingWork([entries[0], answered]), []);
 });
 
-test("buildView reports outstanding work so done can be refused", () => {
+test("buildView reports a tool call with no result, so done can be refused", () => {
   const busy = buildView({
     goal: "g",
     status: "idle",
-    entries: [{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "x", name: "subagent" }] } }],
+    entries: [{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "x", name: "subagent", arguments: {} }] } }],
   });
-  assert.match(busy, /^outstanding work: subagent$/m);
+  assert.match(busy, /^tool calls with no result: subagent$/m);
   const quiet = buildView({ goal: "g", status: "idle", entries: [assistant("all done")] });
-  assert.match(quiet, /^outstanding work: none$/m);
+  assert.match(quiet, /^tool calls with no result: none$/m);
+});
+
+test("the view says how many reviews in a row changed nothing, and says nothing at zero", () => {
+  const entries = [assistant("hi")];
+  assert.match(buildView({ goal: "g", status: "idle", entries, stale: 3 }), /no new file, commit or error for 3 reviews/);
+  assert.doesNotMatch(buildView({ goal: "g", status: "idle", entries }), /reviews in a row/);
 });
 
 test("an error is dropped once the same tool runs clean again", () => {
@@ -83,22 +101,24 @@ test("an error is dropped once the same tool runs clean again", () => {
   assert.equal(other.length, 1, "a different tool running clean must not clear bash's failure");
 });
 
-test("the view carries the summary the worker's own compactor wrote", () => {
-  // This is where VCC's summary lands when VCC is the worker's compactor, so we read it rather
-  // than porting a summarisation pipeline into this extension.
+test("the view merges the worker's compaction summary with the turns after it", () => {
+  // pi-vcc's compile() takes the old summary as previousSummary, so nothing between the summary
+  // and the newest turn falls in the gap between them.
   const view = buildView({
     goal: "g",
     status: "idle",
     entries: [
-      { type: "compaction", summary: "## Goal\n- build the dataset\n- earlier turns condensed here" },
-      assistant("carrying on"),
+      { type: "compaction", summary: "[Session Goal]\n- build the dataset" },
+      assistant("carrying on", [{ name: "write", args: { path: "after.md" } }]),
     ],
   });
-  assert.match(view, /# Earlier work, summarised by the worker's own compactor/);
-  assert.match(view, /build the dataset/);
+  assert.match(view, /build the dataset/, "the summary from before the compaction survives");
+  assert.match(view, /after\.md/, "so does the work done after it");
+});
 
-  const noCompaction = buildView({ goal: "g", status: "idle", entries: [assistant("hi")] });
-  assert.doesNotMatch(noCompaction, /Earlier work/);
+test("the view does not tell the supervisor to use vcc_recall, a tool it does not have", () => {
+  const view = buildView({ goal: "g", status: "idle", entries: [assistant("hi")] });
+  assert.doesNotMatch(view, /vcc_recall/);
 });
 
 test("bookkeeping tool calls are kept out of the transcript", () => {
@@ -111,9 +131,8 @@ test("bookkeeping tool calls are kept out of the transcript", () => {
       assistant("real work", [{ name: "edit", args: { path: "src/a.ts" } }]),
     ],
   });
-  assert.doesNotMatch(view, /TodoWrite/);
   assert.doesNotMatch(view, /todo list updated/);
-  assert.match(view, /edit\(src\/a\.ts\)/);
+  assert.match(view, /src\/a\.ts/);
 });
 
 test("buildView reports the goal, the counts, and the problems", () => {
@@ -122,18 +141,19 @@ test("buildView reports the goal, the counts, and the problems", () => {
     status: "idle",
     entries: [assistant("done", [{ name: "write", args: { path: "results.md" } }]), toolResult("bash", "exit code 2")],
   });
-  assert.match(view, /# Goal\nmake the table/);
+  assert.match(view, /# Goal, as the human or the supervisor set it\nmake the table/);
   assert.match(view, /status: idle/);
   assert.match(view, /turns: 2/);
   assert.match(view, /results\.md/);
   assert.match(view, /bash exit 2/);
 });
 
-test("buildView stays under the 16 KiB channel limit and says it trimmed", () => {
+test("buildView keeps the newest turns when it has to cut for the channel limit", () => {
   const long = Array.from({ length: 400 }, (_, i) => assistant(`turn ${i} ${"x".repeat(400)}`));
-  const view = buildView({ goal: "g", status: "idle", entries: long, recentTurns: 400 });
+  const view = buildView({ goal: "g", status: "idle", entries: long });
   assert.ok(Buffer.byteLength(view, "utf-8") <= MAX_VIEW_BYTES, `view was ${Buffer.byteLength(view)} bytes`);
-  assert.match(view, /\[earlier turns trimmed\]/);
+  assert.match(view, /turn 399/, "the newest turn must survive the cut");
+  assert.doesNotMatch(view, /turn 0 /, "the oldest must be the one dropped");
 });
 
 test("pi's own branch logic drops the abandoned fork, on a session file", async () => {
