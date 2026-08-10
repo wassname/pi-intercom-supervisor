@@ -185,6 +185,27 @@ test("the steer cap stops the loop, and the count survives a reload", async () =
   assert.equal(restored.pairedId, WORKER_ID);
 });
 
+test("after a reload the cap still holds, because state comes back from session entries", async () => {
+  const first = harness(SUPER_ID);
+  await first.start();
+  await first.run("supervise", "worker do the thing");
+  const steer = first.tools.get("steer")!;
+  for (let i = 0; i < MAX_STEER_ROUNDS; i++) {
+    await steer.execute("id", { message: `round ${i}` }, undefined, undefined, first.ctx);
+  }
+
+  // Restart the extension with the entries the first instance wrote, as a reload or compaction does.
+  const carried = first.appended.map((e) => ({ type: "custom", customType: e.type, data: e.data }));
+  const reloaded = harness(SUPER_ID, { entries: carried });
+  await reloaded.start();
+
+  const afterReload = await reloaded.tools
+    .get("steer")!
+    .execute("id", { message: "sneak one in" }, undefined, undefined, reloaded.ctx);
+  assert.ok(afterReload.isError, "a reloaded session must not get a fresh budget of steers");
+  assert.match(afterReload.content[0].text, /cap reached/i);
+});
+
 test("steer refuses when the session is not supervising", async () => {
   const lone = harness(SUPER_ID);
   await lone.start();
