@@ -1,4 +1,31 @@
 /** Text the supervisor session reads. Kept here so the wording is reviewable in one place. */
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+/**
+ * Same precedence as @monotykamary/pi-supervisor, so an existing SUPERVISOR.md keeps working:
+ * <cwd>/.pi/SUPERVISOR.md, then <agent dir>/SUPERVISOR.md, then the default below.
+ */
+export function loadSupervisorPrompt(cwd: string): { prompt: string; source: string } {
+  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+  for (const path of [join(cwd, ".pi", "SUPERVISOR.md"), join(agentDir, "SUPERVISOR.md")]) {
+    if (existsSync(path)) return { prompt: readFileSync(path, "utf-8").trim(), source: path };
+  }
+  return { prompt: DEFAULT_SUPERVISOR_PROMPT, source: "built-in" };
+}
+
+/** Sent once when pairing, so the supervisor knows its job before the first view arrives. */
+export const BRIEF = (policy: string, goal: string, worker: string) =>
+  `${policy}
+
+You are now supervising the pi session "${worker}".
+Goal: ${goal || "infer it from the first view you receive"}
+
+Your verdict is a tool call, not text. Call steer, or call done. If the policy above tells you to
+reply with JSON, ignore that part: it belongs to a different supervisor and nothing parses it here.
+
+Do not act yet. The worker's view arrives when it stops. Reply with exactly: watching`;
 
 export const REVIEW_NUDGE = (view: string, roundsLeft: number) =>
   `The worker stopped. Here is its view.

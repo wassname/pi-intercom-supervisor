@@ -24,7 +24,7 @@ import {
   type SuperviseState,
   type Wire,
 } from "./protocol.ts";
-import { CAP_REACHED, REVIEW_NUDGE } from "./prompts.ts";
+import { BRIEF, CAP_REACHED, REVIEW_NUDGE, loadSupervisorPrompt } from "./prompts.ts";
 
 export default function (pi: any) {
   let channel: IntercomExtensionChannel | undefined;
@@ -32,6 +32,11 @@ export default function (pi: any) {
   let latestView = "";
   let ctx: any;
   let ownId = "";
+
+  /** PI_SUPERVISE_DEBUG=1 traces the wire to stderr. The channel is invisible in transcripts. */
+  const debug = (event: string, detail: unknown = {}) => {
+    if (process.env.PI_SUPERVISE_DEBUG) console.error(`[pi-supervise] ${event} ${JSON.stringify(detail)}`);
+  };
 
   function save() {
     pi.appendEntry(STATE_ENTRY, state);
@@ -55,7 +60,9 @@ export default function (pi: any) {
   // ---- inbound, one branch per role ------------------------------------------------------
 
   async function onWire(from: string, wire: Wire) {
-    if (wire.to !== (await resolveOwnId())) return;
+    const me = await resolveOwnId();
+    debug("wire in", { t: wire.t, from: from.slice(0, 8), forUs: wire.to === me, role: state.role });
+    if (wire.to !== me) return;
 
     if (wire.t === "pair") {
       if (state.role !== "none") return; // first pairing wins; we cannot authenticate a second one
@@ -112,13 +119,20 @@ export default function (pi: any) {
   /** Fires only when no retry, compaction, or queued continuation will run, so the worker is truly done. */
   pi.on("agent_settled", async (_event: unknown, context: any) => {
     ctx = context;
+    debug("agent_settled", { role: state.role, hasChannel: Boolean(channel) });
     if (state.role !== "worker" || !channel) return;
-    const view = buildView({
-      goal: state.goal,
-      status: "idle",
-      entries: context.sessionManager.getBranch() as any,
-    });
-    send({ t: "view", to: state.pairedId, view });
+    try {
+      const view = buildView({
+        goal: state.goal,
+        status: "idle",
+        entries: context.sessionManager.getBranch() as any,
+      });
+      send({ t: "view", to: state.pairedId, view });
+      debug("published view", { bytes: Buffer.byteLength(view), to: state.pairedId });
+    } catch (err) {
+      debug("view publish failed", { error: (err as Error).message });
+      throw err;
+    }
   });
 
   // ---- supervisor side: one command and three tools ---------------------------------------
@@ -154,7 +168,10 @@ export default function (pi: any) {
       state = { role: "supervisor", pairedId: matches[0].id, goal, steerRounds: 0 };
       save();
       send({ t: "pair", to: state.pairedId, goal });
-      context.ui?.notify?.(`supervising ${matches[0].name ?? state.pairedId.slice(0, 8)}`, "info");
+
+      const { prompt, source } = loadSupervisorPrompt(context.cwd);
+      pi.sendUserMessage(BRIEF(prompt, goal, matches[0].name ?? state.pairedId.slice(0, 8)));
+      context.ui?.notify?.(`supervising ${matches[0].name ?? state.pairedId.slice(0, 8)} (policy: ${source})`, "info");
     },
   });
 
