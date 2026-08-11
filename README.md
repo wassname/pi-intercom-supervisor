@@ -1,14 +1,15 @@
 # pi-intercom-supervisor
 
-A supervisor pi session watches a worker pi session and steers it, over pi-intercom.
+Original ask:
+> https://github.com/monotykamary/pi-supervisor but with pi-intercom and linked to matrix or telegram
+> - wassname
 
-This is [monotykamary/pi-supervisor](https://github.com/monotykamary/pi-supervisor) with the hidden
-in-memory supervisor replaced by a second real pi session. That one change is the point: you can
-see the supervisor, talk to it, and bridge it to your phone with an ordinary chat extension.
-
-## Use
-
-Two terminals, both with `pi-intercom` and this extension loaded.
+[monotykamary/pi-supervisor](https://github.com/monotykamary/pi-supervisor) runs the supervisor as a
+hidden in-memory session. This runs it as a second real pi session and uses
+[pi-intercom](https://github.com/tintinweb/pi-intercom) as the wire between the two. You can see the
+supervisor, talk to it, and bridge it to your phone with any chat extension, because it is just a pi
+session. That swap deleted the context pipeline, the four reframe tiers, the JSON verdict parser,
+the widget and the plugin API: 5201 lines of `src` down to 788.
 
 ```
 # terminal 1, the worker                # terminal 2, the supervisor
@@ -17,113 +18,66 @@ pi -n worker                            pi -n supervisor
 > do the work
 ```
 
-The worker runs as ordinary pi. When it stops, the supervisor gets a view of it and decides:
-`steer` sends one concrete next action, `done` ends supervision. If the supervisor needs a human,
-it replies in plain text instead of calling a tool.
-
-For the phone, attach a chat bridge to the supervisor session, not the worker:
-
-```
-pi -n supervisor -e /path/to/pi-intercom-supervisor/src/index.ts   # plus @llblab/pi-telegram
-```
-
-Then you are talking to the supervisor, which is read only if you launch it with `-t read,grep,list`.
+Both sessions load this extension and pick their role at runtime. The worker runs as ordinary pi.
+When it stops, the supervisor gets a view of it and calls `steer` with one concrete next action, or
+`done`. If it needs a human it replies in plain text instead of calling a tool, and that is what
+reaches your phone. Policy comes from `<cwd>/.pi/SUPERVISOR.md`, then `<agent dir>/SUPERVISOR.md`,
+then a built-in default, same precedence as the original, so an existing file keeps working. A
+verdict here is a tool call, so nothing can fail to parse.
 
 ## How it works
 
-```
-worker                                   supervisor
-  agent_settled
-    -> buildView(getBranch())
-    -> channel.publish({t:"view"})  --->  onEvent
-                                          -> sendUserMessage(view)  [own turn]
-                                          -> LLM calls steer
-  onEvent                          <---   channel.publish({t:"directive"})
-    -> sendUserMessage("[supervisor] ...")  [own turn]
-```
-
 The pi-intercom extension channel carries the data. It never enters a transcript and never starts a
-turn, so each side triggers its own turn locally with `pi.sendUserMessage`. That keeps the steer in
-the worker's user and assistant trajectory, where it belongs.
+turn, so each side triggers its own turn locally with `pi.sendUserMessage`, and the steer lands in
+the worker's user and assistant trajectory where it belongs. Pairing is on `fromSessionId`, which
+the broker stamps from its own registry, so a payload cannot forge it. The broker has no socket
+authentication, so the trust level is any process running as you, and every session that loads this
+extension sees every message. Do not load it in a session you would not trust with the transcript.
 
 The view body is [pi-vcc](https://github.com/sting8k/pi-vcc)'s `compile()`, the same algorithmic
-compactor the worker can run as its own. The two halves meet at the worker's last compaction: the
-compactor's own summary covers everything up to it, and pi-vcc compiles every message after it.
-Nothing sits in a gap between them, and nothing is sent twice. On top of that the view carries what
-a compactor has no reason to track: tool calls with no result, tool errors, and whether anything
-changed since the last review.
+compactor (no LLM calls) you can run as your own. The two halves meet at the worker's last
+compaction: the compactor's summary covers everything before it, pi-vcc compiles every message
+after. On top of that the view carries what a compactor has no reason to track: tool calls with no
+result, child pi processes, tool errors, and whether anything changed since the last review.
 
-Pairing is on `fromSessionId`, which the broker stamps from its own registry
-(`broker.ts:1247`), so a payload cannot forge it. The broker has no socket authentication, and its
-own README calls session IDs "the trusted addressing key", so the trust level here is "any process
-running as you", the same as pi itself.
+Three of the original's behaviours are ported rather than reinvented, all MIT: mid-run signals
+(`src/signals.ts`, five tool errors in a row or five reads of one file with no edit, checked on
+`turn_end` so a worker an hour down the wrong path is caught before it stops), the process tree
+check (`src/subagents.ts`, `ps` for child pi processes, so a settled worker with a subagent still
+running is not called finished), and the SUPERVISOR.md precedence.
 
-The worker acknowledges a pair, and the last pair wins. A supervisor that gets no acknowledgment in
-10 seconds unpairs and tells you, because the usual cause is a target that does not load this
-extension. A worker taken over tells the supervisor that lost it. Before this, a worker whose
-supervisor had died stayed bound to it forever and told nobody, while the new supervisor sat waiting
-for a view that could never arrive.
+## Decisions
 
-Messages go out with `audience: "capable"`, which the broker routes to every session that loads
-this extension, not only to the paired one. `wire.to` is a filter applied by the receiver. So a third
-pi session with this extension loaded can read every view and every steer, and can send a `pair` to
-any worker that is not paired yet. On one machine, one user, that is the same trust level as the
-broker itself. Do not load this extension in a session you would not trust with the worker's
-transcript.
+No round cap, no budget, no automatic stop. Supervision runs until you type `/supervise stop` or
+the supervisor calls `done` on evidence. Ending early is the failure this exists to prevent: at a
+fixed model, scaffolds that keep re-prompting scored 8.7% on MLE-bench against 0.8% for scaffolds
+that let the model stop ([arXiv:2410.07095](https://arxiv.org/abs/2410.07095)). A cap would be a
+competing stopping objective.
 
-There is no round limit and no budget, deliberately. Supervision runs until you type
-`/supervise stop`. Ending a run early is the failure this exists to prevent: at a fixed model,
-scaffolds that keep re-prompting scored 8.7% on MLE-bench against 0.8% for scaffolds that let the
-model stop (arXiv:2410.07095). A cap would be a competing stopping objective.
+Two guards remain and both prevent a false ending. `steer` is refused while no goal is set, so the
+supervisor asks you or calls `set_goal`, which sends the goal to the worker and heads every later
+view. `done` is refused while a tool call has no result or a child pi process is running. Neither is
+as strong as it sounds. The first stops an ungrounded instruction, not an ungrounded goal, since the
+supervisor can call `set_goal` with something vague; quoting it to you is the only real check. The
+second proves no tracked work is missing, not that nothing is running.
 
-Two guards remain, and both prevent a false ending rather than causing one. `steer` refuses while
-no goal is set, so the supervisor asks you or calls `set_goal` instead of inventing work. `done`
-refuses while the worker has a tool call with no result, so a running subagent cannot be declared
-finished. The goal, the pairing, the instruction count and the last few instructions are written to
-session entries, so a compaction or a reload keeps them.
+Against a supervisor that circles, the view reports how many reviews in a row produced no new file,
+commit or error, and an instruction that reuses a recent one's vocabulary comes back named. Neither
+stops anything. Word overlap runs about 0.44 on a rewording against under 0.2 on two different
+instructions, and 0 on a paraphrase sharing no words, so it is a floor on repetition, not a bound.
 
-Neither guard is as strong as it sounds, and an external review was right to say so. The goal guard
-stops an ungrounded instruction, not an ungrounded goal: the supervisor can satisfy it by calling
-`set_goal` with something vague. So `set_goal` sends the goal to the worker, where it heads every
-later view, and tells the supervisor to quote it to you, which is the only real check on it. The
-`done` guard proves that no tracked tool call is missing its result. It cannot see a detached
-process, so it is not proof that no work is running.
+## Limits
 
-Against a supervisor that loops, the view carries two mechanical signals, and neither of them stops
-anything. It reports how many reviews in a row produced no new file, no new commit and no new error.
-And an instruction that reuses the vocabulary of a recent one comes back named, so the supervisor
-has to say what changed before repeating it. Word overlap catches a rewording, about 0.44 on a real
-pair against under 0.2 for two different instructions. It scores 0 on a true paraphrase, so treat it
-as a floor on repetition rather than a bound.
-
-The supervisor policy comes from `<cwd>/.pi/SUPERVISOR.md`, then `<agent dir>/SUPERVISOR.md`, then a
-built-in default. That is the same precedence as pi-supervisor, so an existing file keeps working.
-One difference: a verdict here is a tool call, not JSON, and the pairing brief says so explicitly.
+The `done` guard sees child pi processes but not a detached job, a queue or a training run. Mid-run
+watching only fires on the two signals above, so quieter wrong paths still wait for the worker to
+stop. Views are cut to 15 KB, oldest turns first, because the broker drops anything over 16 KiB and
+never tells the extension. The last pair wins and nothing authenticates it. The stagnation count
+lives in memory and restarts at zero with the worker.
 
 ## Testing
 
 ```
-npm test                      # tier 1 and the fork fixture, no pi, no model, free
-npx tsx scripts/e2e.ts        # tier 3: two real pi processes and a real model, costs cents
-PI_SUPERVISOR_DEBUG=1 pi ...   # trace the wire to stderr, since the channel is invisible
+npm test                      # 50 tests, no pi, no model, free
+npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
+PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```
-
-`scripts/e2e.ts` writes its log to `docs/uat/`, which is not committed.
-
-## Known limits
-
-- The supervisor session is long lived, so its context grows with every review. Measured at about
-  3.5 KB per review on a trivial worker, and a real worker view can reach 15 KB. Its own compaction
-  handles the tail, and the last few instructions are persisted outside the transcript so a
-  compaction cannot erase them. Not yet solved: the review prompt still carries the whole view.
-- The outstanding-work check only sees tool calls inside the session. A detached process, a queued
-  job or a training run that outlives the turn still reads as finished.
-- The supervisor only looks when the worker stops. A worker an hour down the wrong path is not
-  caught until it settles. pi-supervisor also watched mid-turn; this does not.
-- The last pair wins, and nothing authenticates it. Any session that loads this extension can take
-  a worker over. Same trust boundary as the broker: one machine, one user.
-- Views are cut to 15 KB, under the channel's 16 KiB limit. The oldest turns go first, so the newest
-  survive; if the header alone is still too big, the view is cut and says so. Without that cut the
-  broker rejects the payload and the extension is never told, so the supervisor would go blind.
-- Every capable session sees every message. See the routing note above.
-- The stagnation count lives in memory. Restart the worker and it starts at zero again.

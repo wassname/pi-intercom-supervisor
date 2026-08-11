@@ -87,6 +87,9 @@ function harness(ownId: string, { entries = [] as any[], isIdle = true, branch =
     async settle() {
       for (const fn of handlers.get("agent_settled") ?? []) await fn({}, ctx);
     },
+    async turnEnd() {
+      for (const fn of handlers.get("turn_end") ?? []) await fn({}, ctx);
+    },
     async run(command: string, args: string) {
       await commands.get(command)!(args, ctx);
     },
@@ -394,7 +397,15 @@ test("done is refused while the worker has an unanswered tool call", async () =>
 
   const blocked = await sup.tools.get("done")!.execute("id", { reason: "looks finished" }, undefined, undefined, sup.ctx);
   assert.ok(blocked.isError, "done must be refused while a tool call has no result");
-  assert.match(blocked.content[0].text, /no result yet \(subagent\)/);
+  assert.match(blocked.content[0].text, /still has work running \(subagent\)/);
+
+  // Same guard, the other half: a subagent running as its own process leaves no unanswered call.
+  const detached = buildView({ goal: "finish the sweep", status: "idle", entries: [message("assistant", "all done")], subagents: [4242] });
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: detached });
+  await new Promise((r) => setTimeout(r, 5));
+  const stillBusy = await sup.tools.get("done")!.execute("id", { reason: "looks finished" }, undefined, undefined, sup.ctx);
+  assert.ok(stillBusy.isError, "done must be refused while a child pi process is running");
+  assert.match(stillBusy.content[0].text, /still has work running \(4242\)/);
 });
 
 test("done is allowed once nothing is outstanding", async () => {
@@ -468,6 +479,65 @@ test("supervising a second session is refused while the first is still paired", 
 
   assert.equal(sup.published.length, before, "no second pair goes out");
   assert.match(sup.notices.join("\n"), /already paired/);
+});
+
+test("a worker stuck mid-turn wakes the supervisor once, not every sub-turn", async () => {
+  // Without this the supervisor only looks when the worker stops, so an hour down the wrong path
+  // is an hour nobody looks.
+  const entries: any[] = [];
+  const worker = harness(WORKER_ID, { entries, isIdle: false });
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 5));
+
+  const failing = (n: number) => [
+    { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: `c${n}`, name: "bash", arguments: { command: "npm test" } }] } },
+    { type: "message", message: { role: "toolResult", toolName: "bash", toolCallId: `c${n}`, isError: true, content: [{ type: "text", text: "cannot find module" }] } },
+  ];
+
+  for (let i = 0; i < 4; i++) {
+    entries.push(...failing(i));
+    await worker.turnEnd();
+  }
+  assert.equal(worker.published.filter((p) => p.t === "view").length, 0, "four errors is not yet a signal");
+
+  entries.push(...failing(4));
+  await worker.turnEnd();
+  const views = worker.published.filter((p) => p.t === "view");
+  assert.equal(views.length, 1, "the fifth error in a row publishes");
+  assert.match(views[0].view, /status: working, tool_error: bash: cannot find module/);
+
+  await worker.turnEnd();
+  assert.equal(worker.published.filter((p) => p.t === "view").length, 1, "the same signal must not publish again");
+});
+
+test("reading one file over and over, with no edit, is a mid-run signal", async () => {
+  const entries: any[] = [];
+  const worker = harness(WORKER_ID, { entries, isIdle: false });
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 5));
+
+  const read = (path: string) => ({
+    type: "message",
+    message: { role: "assistant", content: [{ type: "toolCall", id: "r", name: "read", arguments: { path } }] },
+  });
+  for (let i = 0; i < 5; i++) entries.push(read("src/view.ts"));
+  await worker.turnEnd();
+  assert.match(worker.published.find((p) => p.t === "view").view, /status: working, file_read_loop: src\/view\.ts/);
+
+  // An edit to that file says the reading was going somewhere, so the count starts again.
+  const fresh = harness(WORKER_ID, { entries: [], isIdle: false });
+  await fresh.start();
+  fresh.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 5));
+  const edited = [read("a.ts"), read("a.ts"), {
+    type: "message",
+    message: { role: "assistant", content: [{ type: "toolCall", id: "e", name: "edit", arguments: { path: "a.ts" } }] },
+  }, read("a.ts"), read("a.ts"), read("a.ts")];
+  (fresh.ctx.sessionManager.getBranch() as any[]).push(...edited);
+  await fresh.turnEnd();
+  assert.equal(fresh.published.filter((p) => p.t === "view").length, 0);
 });
 
 test("the worker counts reviews in a row where nothing changed", async () => {

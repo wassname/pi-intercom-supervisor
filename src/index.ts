@@ -14,6 +14,8 @@ import {
   type IntercomExtensionEvent,
 } from "pi-intercom/extension-api.ts";
 import { buildView, progressKey } from "./view.ts";
+import { detectSignal } from "./signals.ts";
+import { waitForSubagents } from "./subagents.ts";
 import {
   EMPTY_STATE,
   NAMESPACE,
@@ -40,6 +42,8 @@ export default function (pi: any) {
   /** Worker side: the last progressKey, and how many reviews in a row have matched it. */
   let lastProgress = "";
   let staleReviews = 0;
+  /** Worker side: the last mid-run signal published, so one stuck loop wakes the supervisor once. */
+  let lastSignal = "";
   /** Supervisor side: cleared when the worker acknowledges the pair. */
   let pairTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -168,19 +172,47 @@ export default function (pi: any) {
     ctx = context;
   });
 
+  /**
+   * Fires after each LLM sub-turn, while the worker is still working.
+   *
+   * Publishing here is what lets the supervisor catch a worker an hour down the wrong path, rather
+   * than waiting for it to stop. Only a new signal publishes, so a worker stuck on one error does
+   * not wake the supervisor every sub-turn.
+   */
+  pi.on("turn_end", async (_event: unknown, context: any) => {
+    ctx = context;
+    if (state.role !== "worker" || !channel) return;
+    try {
+      const entries = context.sessionManager.getBranch() as any;
+      const signal = detectSignal(entries.filter((e: any) => e.type === "message" && e.message).map((e: any) => e.message));
+      if (!signal || signal.detail === lastSignal) return;
+      lastSignal = signal.detail;
+      const view = buildView({ goal: state.goal, status: `working, ${signal.type}: ${signal.detail}`, entries });
+      send({ t: "view", to: state.pairedId, view });
+      debug("published mid-run view", { signal: signal.type, to: state.pairedId });
+    } catch (err) {
+      debug("mid-run view failed", { error: (err as Error).message });
+      context.ui?.notify?.(`intercom-supervisor: could not send the mid-run view, ${(err as Error).message}`, "error");
+    }
+  });
+
   /** Fires only when no retry, compaction, or queued continuation will run, so the worker is truly done. */
   pi.on("agent_settled", async (_event: unknown, context: any) => {
     ctx = context;
     debug("agent_settled", { role: state.role, hasChannel: Boolean(channel) });
     if (state.role !== "worker" || !channel) return;
+    lastSignal = "";
     try {
+      // A subagent runs as its own process and leaves no unanswered tool call, so a settled worker
+      // can still be spending. Wait for them, then say what is left either way.
+      const subagents = await waitForSubagents();
       const entries = context.sessionManager.getBranch() as any;
       const progress = progressKey(entries);
       staleReviews = progress === lastProgress ? staleReviews + 1 : 0;
       lastProgress = progress;
-      const view = buildView({ goal: state.goal, status: "idle", entries, stale: staleReviews });
+      const view = buildView({ goal: state.goal, status: "idle", entries, stale: staleReviews, subagents });
       send({ t: "view", to: state.pairedId, view });
-      debug("published view", { bytes: Buffer.byteLength(view), to: state.pairedId, stale: staleReviews });
+      debug("published view", { bytes: Buffer.byteLength(view), to: state.pairedId, stale: staleReviews, subagents });
     } catch (err) {
       // Nothing awaits this handler, so rethrowing would be an unhandled rejection nobody sees,
       // and the supervisor would silently never wake again.
@@ -328,10 +360,11 @@ Tell them in your reply, quoting it, so they can correct it.`,
       // "done" while a delegated tool call has no result is a false completion: the worker settled
       // but its subagent or background job is still spending. This proves only that no tracked
       // tool result is missing. A detached process is invisible to it.
-      const pending = latestView.match(/^tool calls with no result: (?!none)(.+)$/m);
+      const pending = latestView.match(/^tool calls with no result: (?!none)(.+)$/m)
+        ?? latestView.match(/^child pi processes still running: (?!none)(.+)$/m);
       if (pending) {
         return {
-          content: [{ type: "text", text: `Cannot finish: the worker has a tool call with no result yet (${pending[1]}). Wait for the next view.` }],
+          content: [{ type: "text", text: `Cannot finish: the worker still has work running (${pending[1]}). Wait for the next view.` }],
           isError: true,
         };
       }

@@ -172,10 +172,12 @@ export interface ViewInput {
   entries: Entry[];
   /** Reviews in a row where progressKey did not change. 0 means something changed this time. */
   stale?: number;
+  /** Child pi processes still running. A settled worker with one of these is still spending. */
+  subagents?: number[];
 }
 
 /** Render the view, and cut it to MAX_VIEW_BYTES so the broker cannot reject it. */
-export function buildView({ goal, status, entries, stale = 0 }: ViewInput): string {
+export function buildView({ goal, status, entries, stale = 0, subagents = [] }: ViewInput): string {
   const messages = entries.filter((e) => e.type === "message" && e.message);
   const errors = problems(messages);
   const pending = outstandingWork(messages);
@@ -190,6 +192,7 @@ export function buildView({ goal, status, entries, stale = 0 }: ViewInput): stri
     `status: ${status}`,
     `turns: ${messages.length}`,
     `tool calls with no result: ${pending.length ? pending.join(", ") : "none"}`,
+    `child pi processes still running: ${subagents.length ? subagents.join(", ") : "none"}`,
     ...(stale > 0 ? [`no new file, commit or error for ${stale} reviews in a row`] : []),
     ``,
     `# Problems`,
