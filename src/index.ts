@@ -15,7 +15,7 @@ import {
 } from "pi-intercom/extension-api.ts";
 import { buildView, progressKey } from "./view.ts";
 import { detectSignal } from "./signals.ts";
-import { waitForSubagents } from "./subagents.ts";
+import { childPiProcesses, waitForSubagents } from "./subagents.ts";
 import {
   EMPTY_STATE,
   NAMESPACE,
@@ -187,7 +187,10 @@ export default function (pi: any) {
       const signal = detectSignal(entries.filter((e: any) => e.type === "message" && e.message).map((e: any) => e.message));
       if (!signal || signal.detail === lastSignal) return;
       lastSignal = signal.detail;
-      const view = buildView({ goal: state.goal, status: `working, ${signal.type}: ${signal.detail}`, entries });
+      // Checked here too. This view replaces the one done reads, so leaving it out would report
+      // "child pi processes still running: none" and unblock done while a subagent is running.
+      const subagents = await childPiProcesses();
+      const view = buildView({ goal: state.goal, status: `working, ${signal.type}: ${signal.detail}`, entries, subagents });
       send({ t: "view", to: state.pairedId, view });
       debug("published mid-run view", { signal: signal.type, to: state.pairedId });
     } catch (err) {

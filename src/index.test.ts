@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
+import { copyFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { INTERCOM_EXTENSION_REGISTER_EVENT } from "pi-intercom/extension-api.ts";
 import extension from "./index.ts";
 import { buildView } from "./view.ts";
@@ -538,6 +542,51 @@ test("reading one file over and over, with no edit, is a mid-run signal", async 
   (fresh.ctx.sessionManager.getBranch() as any[]).push(...edited);
   await fresh.turnEnd();
   assert.equal(fresh.published.filter((p) => p.t === "view").length, 0);
+});
+
+test("a supervisor session publishes nothing on turn_end, even when its own turn looks stuck", async () => {
+  // The supervisor reads views, it does not send them. Its own failing tool calls are its business.
+  const entries: any[] = [];
+  for (let i = 0; i < 6; i++) {
+    entries.push(
+      { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: `c${i}`, name: "read", arguments: { path: "same.ts" } }] } },
+      { type: "message", message: { role: "toolResult", toolName: "read", toolCallId: `c${i}`, isError: true, content: [{ type: "text", text: "no such file" }] } },
+    );
+  }
+  const sup = harness(SUPER_ID, { entries });
+  await sup.start();
+  await sup.run("supervise", "worker g");
+  const sent = sup.published.length;
+  await sup.turnEnd();
+  assert.equal(sup.published.length, sent);
+});
+
+test("a mid-run view still reports the running subagent, so done stays refused", async (t) => {
+  // The mid-run view replaces the one done reads. Leaving the subagent line out of it reported
+  // "none" and unblocked done while a subagent was still spending.
+  if (process.platform !== "linux" && process.platform !== "darwin") return t.skip("ps only");
+  const dir = mkdtempSync(join(tmpdir(), "supervisor-test-"));
+  const fake = join(dir, "pi");
+  copyFileSync("/usr/bin/sleep", fake);
+  const child = spawn(fake, ["30"], { stdio: "ignore" });
+  await new Promise((r) => setTimeout(r, 300));
+
+  const entries: any[] = [];
+  const worker = harness(WORKER_ID, { entries, isIdle: false });
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 5));
+  for (let i = 0; i < 5; i++) {
+    entries.push(
+      { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: `c${i}`, name: "bash", arguments: {} }] } },
+      { type: "message", message: { role: "toolResult", toolName: "bash", toolCallId: `c${i}`, isError: true, content: [{ type: "text", text: "boom" }] } },
+    );
+  }
+  await worker.turnEnd();
+  child.kill();
+
+  const view = worker.published.find((p) => p.t === "view").view;
+  assert.match(view, new RegExp(`^child pi processes still running: ${child.pid}$`, "m"));
 });
 
 test("the worker counts reviews in a row where nothing changed", async () => {

@@ -12,7 +12,11 @@ import { promisify } from "node:util";
 
 const execAsync = promisify(exec);
 
-/** How long to wait for subagents before publishing anyway, so the supervisor is never left blind. */
+/**
+ * How long to wait for subagents before publishing anyway, so the supervisor is never left blind.
+ * The same 120 seconds the original passes at its call site, not the 60 in its function default.
+ * pi awaits this handler, so the worker session stays busy for the wait.
+ */
 export const SUBAGENT_WAIT_MS = 120_000;
 const POLL_MS = 2000;
 

@@ -77,7 +77,7 @@ lives in memory and restarts at zero with the worker.
 ## Testing
 
 ```
-npm test                      # 50 tests, no pi, no model, free
+npm test                      # 54 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```

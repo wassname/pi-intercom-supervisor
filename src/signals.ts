@@ -6,9 +6,10 @@
  * caught until it settles.
  *
  * Ported from @monotykamary/pi-supervisor (MIT), src/state/mid-run-signals.ts. Same two signals and
- * the same thresholds, so behaviour matches what that extension already does. It reads raw session
- * messages rather than pi-vcc's normalize, which drops isError and would silently disable the first
- * signal.
+ * the same thresholds. Two differences: it reads raw session messages rather than pi-vcc's
+ * normalize, which drops isError and would silently disable the first signal, and an assistant
+ * message between two failures does not break the run of errors, so commentary while thrashing
+ * still counts. Both make this catch a little more than the original does.
  */
 import { extractPath } from "@sting8k/pi-vcc/src/core/tool-args.ts";
 import type { AgentMsg, Block } from "./view.ts";
