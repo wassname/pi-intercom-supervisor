@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { copyFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { childPiProcesses, waitForSubagents } from "./subagents.ts";
+import { childPiProcesses } from "./subagents.ts";
 
 /**
  * Runs the real ps command against a real child process, because the parsing is the part most
@@ -27,18 +27,17 @@ test("a child process named pi is found by ps, and stops being found when it exi
   assert.deepEqual(await childPiProcesses(), [child.pid], "the running child must be reported");
 
   child.kill();
-  await new Promise((r) => r(child.once("exit", r)));
-  assert.deepEqual(await waitForSubagents(5000), [], "waiting must return once the child is gone");
+  await new Promise((r) => child.once("exit", r));
+  assert.deepEqual(await childPiProcesses(), [], "and not reported once it exits");
 });
 
-test("waitForSubagents gives up rather than blocking the loop for good", async (t) => {
+test("the check is a snapshot, so it cannot hold up the worker's settle", async (t) => {
   if (process.platform !== "linux" && process.platform !== "darwin") return t.skip("ps only");
   const child = spawnChildNamedPi();
   await new Promise((r) => setTimeout(r, 300));
 
   const started = Date.now();
-  const left = await waitForSubagents(1000);
-  assert.deepEqual(left, [child.pid], "on timeout it reports what is still running, it does not lie");
-  assert.ok(Date.now() - started < 6000, "and it comes back, so the supervisor is never left blind");
+  assert.deepEqual(await childPiProcesses(), [child.pid]);
+  assert.ok(Date.now() - started < 1000, "it returns while the child is still running, it does not wait");
   child.kill();
 });

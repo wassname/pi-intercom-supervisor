@@ -46,6 +46,11 @@ Three of the original's behaviours are ported rather than reinvented, all MIT: m
 check (`src/subagents.ts`, `ps` for child pi processes, so a settled worker with a subagent still
 running is not called finished), and the SUPERVISOR.md precedence.
 
+The process check is a snapshot where the original polls for two minutes. pi awaits the settle
+handler, so polling there holds the worker's own settle for the whole poll. The loop already does
+the waiting: the supervisor sees the process listed, `done` is refused, and it steers the worker to
+wait instead. That puts the waiting in the transcript where you can read it.
+
 ## Decisions
 
 No round cap, no budget, no automatic stop. Supervision runs until you type `/supervise stop` or

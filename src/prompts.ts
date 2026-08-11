@@ -66,6 +66,10 @@ Call steer when the work is incomplete, when the worker asked a question you can
 sensible default, or when it claims success without evidence. One concrete next action per steer.
 Never repeat a steer that had no effect; change the approach instead.
 
+The view line "child pi processes still running" means the worker delegated to a subagent that is
+still working. It stopped, the subagent did not. Do not call done, it will be refused. Steer the
+worker to wait for that subagent and report what it produced.
+
 The view line "no new file, commit or error for N reviews in a row" means your last N instructions
 moved nothing the worker's session can show. Two or more is your signal to change approach, ask the
 human, or check whether the goal is already met. Sometimes it is honest work on one file, so read

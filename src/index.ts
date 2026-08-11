@@ -15,7 +15,7 @@ import {
 } from "pi-intercom/extension-api.ts";
 import { buildView, progressKey } from "./view.ts";
 import { detectSignal } from "./signals.ts";
-import { childPiProcesses, waitForSubagents } from "./subagents.ts";
+import { childPiProcesses } from "./subagents.ts";
 import {
   EMPTY_STATE,
   NAMESPACE,
@@ -207,8 +207,8 @@ export default function (pi: any) {
     lastSignal = "";
     try {
       // A subagent runs as its own process and leaves no unanswered tool call, so a settled worker
-      // can still be spending. Wait for them, then say what is left either way.
-      const subagents = await waitForSubagents();
+      // can still be spending. Report it and let the supervisor steer; do not wait here.
+      const subagents = await childPiProcesses();
       const entries = context.sessionManager.getBranch() as any;
       const progress = progressKey(entries);
       staleReviews = progress === lastProgress ? staleReviews + 1 : 0;

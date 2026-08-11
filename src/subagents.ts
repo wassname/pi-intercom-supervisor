@@ -4,6 +4,11 @@
  * The in-session check only sees tool calls that never got a result. A subagent spawned as its own
  * process leaves no such trace, so the worker settles and the view looks quiet.
  *
+ * This is a snapshot, not a wait. The original polls here for up to two minutes, and pi awaits the
+ * settle handler (agent-session.js:330), so that holds the worker's own settle for the whole poll.
+ * The loop already does the waiting: the supervisor sees the process listed, done is refused, and
+ * it steers instead. That leaves the waiting in the transcript where you can read it.
+ *
  * Ported from @monotykamary/pi-supervisor (MIT), src/subagent-detector.ts. Extension agnostic: it
  * does not matter who spawned them. Nothing is caught here, so a broken ps is loud.
  */
@@ -11,14 +16,6 @@ import { exec } from "node:child_process";
 import { promisify } from "node:util";
 
 const execAsync = promisify(exec);
-
-/**
- * How long to wait for subagents before publishing anyway, so the supervisor is never left blind.
- * The same 120 seconds the original passes at its call site, not the 60 in its function default.
- * pi awaits this handler, so the worker session stays busy for the wait.
- */
-export const SUBAGENT_WAIT_MS = 120_000;
-const POLL_MS = 2000;
 
 export async function childPiProcesses(): Promise<number[]> {
   if (process.platform !== "darwin" && process.platform !== "linux") return [];
@@ -29,15 +26,4 @@ export async function childPiProcesses(): Promise<number[]> {
     .map((line) => line.trim().split(/\s+/))
     .filter((parts) => parts.length >= 3 && Number(parts[0]) === process.pid && parts[2] === "pi")
     .map((parts) => Number(parts[1]));
-}
-
-/** Poll until no child pi process is left, or the wait runs out. Returns whatever is still running. */
-export async function waitForSubagents(timeoutMs = SUBAGENT_WAIT_MS): Promise<number[]> {
-  const deadline = Date.now() + timeoutMs;
-  let running = await childPiProcesses();
-  while (running.length && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, POLL_MS));
-    running = await childPiProcesses();
-  }
-  return running;
 }
