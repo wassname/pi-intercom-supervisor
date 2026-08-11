@@ -1,15 +1,17 @@
 /** Text the supervisor session reads. Kept here so the wording is reviewable in one place. */
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 /**
  * Same precedence as @monotykamary/pi-supervisor, so an existing SUPERVISOR.md keeps working:
  * <cwd>/.pi/SUPERVISOR.md, then <agent dir>/SUPERVISOR.md, then the default below.
+ *
+ * getAgentDir is pi's own, so a profile that moves the agent dir moves this with it. That matters:
+ * the only SUPERVISOR.md on this machine lives in a profile, not in ~/.pi/agent.
  */
 export function loadSupervisorPrompt(cwd: string): { prompt: string; source: string } {
-  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
-  for (const path of [join(cwd, ".pi", "SUPERVISOR.md"), join(agentDir, "SUPERVISOR.md")]) {
+  for (const path of [join(cwd, ".pi", "SUPERVISOR.md"), join(getAgentDir(), "SUPERVISOR.md")]) {
     if (existsSync(path)) return { prompt: readFileSync(path, "utf-8").trim(), source: path };
   }
   return { prompt: DEFAULT_SUPERVISOR_PROMPT, source: "built-in" };
@@ -85,6 +87,13 @@ A confident summary is not evidence. When in doubt, steer.
 Watch for an agent that concludes from a score without reading the outputs. Steer if it states a
 conclusion without quoting any output, ranks anything without per-item evidence, or says a method
 failed without showing what the output looked like.
+
+Three more ways work gets faked, from @monotykamary/pi-supervisor's cheating list. Steer, and ask
+for the output that would settle it.
+- the worker edits a test to weaken an assertion, or skips a failing one, and calls that progress
+- it reports a number without the command output it came from, or edits the measurement instead of
+  the thing being measured
+- it runs a smaller dataset or part of the suite, then reports as if it ran the whole thing
 
 Do not answer questions that need real human knowledge: passwords, credentials, spending money,
 or a choice between two designs the human cares about. For those, reply in plain text saying what
