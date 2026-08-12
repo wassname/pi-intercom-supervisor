@@ -96,11 +96,6 @@ const WATCH_POLL_MS = 30_000;
 const WRITER_TOOLS = new Set([
   "bash", "edit", "write", "multi_edit", "multiedit", "apply_patch", "notebook_edit",
   "edit_file", "write_file", "quick_edit", "target_edit",
-  // Not a writer, taken for cost. @diegopetrucci/pi-oracle spawns a pi on the top of a hardcoded
-  // preference list, opus first, at xhigh reasoning: one call ran 10.5 minutes on a model at $50
-  // per million output tokens. The supervisor exists to be the cheap half of the pair, and if it
-  // wants a second opinion it can steer the worker to ask for one.
-  "oracle",
 ]);
 
 /**

@@ -87,7 +87,7 @@ function harness(
     },
   };
 
-  let activeTools = ["read", "grep", "list", "bash", "edit", "write", "oracle"];
+  let activeTools = ["read", "grep", "list", "bash", "edit", "write"];
   const status = new Map<string, string | undefined>();
   const ctx = {
     cwd: process.cwd(),
@@ -718,7 +718,7 @@ test("supervising takes the writing tools away, and stopping gives them back", a
   assert.deepEqual(
     during,
     ["read", "grep", "list", "worker_view", "set_goal", "steer", "let_it_run", "done"],
-    "no bash, no edit, no write, no oracle, and the supervisor tools appear",
+    "no bash, no edit, no write, and the supervisor tools appear",
   );
   await sup.run("supervise", "stop");
   assert.deepEqual(sup.pi.getActiveTools(), before, "and back to what you had");
