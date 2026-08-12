@@ -146,20 +146,26 @@ export function turnsSince(entries: Entry[]): number {
   return messagesSince(entries).length;
 }
 
+/** How many reasoning blocks the view carries, and how much of each. Three shows a repeat. */
+const THINKING_BLOCKS = 3;
+const THINKING_CHARS = 500;
+
 /**
- * The worker's latest reasoning. pi-vcc's normalize keeps only text and toolCall blocks, so
- * without this the supervisor never sees it, though you do when you watch the session.
+ * The worker's last few reasoning blocks, oldest first. pi-vcc's normalize keeps only text and
+ * toolCall blocks, so without this the supervisor never sees them, though you do on screen.
  *
- * This is where a stuck worker says so first: it names the approach it is about to retry again
- * before any file or commit changes, which is all the stagnation count can see. Latest block
- * only, because the point is what it is thinking now, not a second transcript.
+ * One block gives the current symptom. Three give a loop: observed 2026-08-12, a worker wrote
+ * "Testing whether tool outputs come through now" seventeen times, and one block showed only the
+ * newest try. Each is cut to its tail, because a reasoning block ends on what it decided to do.
  */
-export function latestThinking(msgs: AgentMsg[]): string {
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const think = blocks(msgs[i]).filter((b) => b.type === "thinking").at(-1);
-    if (think?.thinking) return think.thinking;
+export function latestThinking(msgs: AgentMsg[]): string[] {
+  const found: string[] = [];
+  for (let i = msgs.length - 1; i >= 0 && found.length < THINKING_BLOCKS; i--) {
+    for (const b of blocks(msgs[i]).filter((b) => b.type === "thinking").reverse()) {
+      if (b.thinking && found.length < THINKING_BLOCKS) found.push(b.thinking.slice(-THINKING_CHARS));
+    }
   }
-  return "";
+  return found.reverse();
 }
 
 const VCC_SEPARATOR = "\n\n---\n\n";
@@ -240,7 +246,9 @@ export function buildView({ goal, status, entries, since = 0, stale = 0, subagen
     ``,
     // Tail, not head: a reasoning block ends on what it decided to do, which is the part a
     // steer has to answer. Absent on a provider that redacts reasoning, and that is fine.
-    ...(thinking ? [`# The worker's latest reasoning, the end of it`, thinking.slice(-1200), ``] : []),
+    ...(thinking.length
+      ? [`# The worker's last ${thinking.length} reasoning blocks, oldest first, each cut to its end`, thinking.join("\n--\n"), ``]
+      : []),
     // Sent when this view starts at the compaction boundary, which is the first view and every
     // view after the worker compacts. In between the supervisor already has it.
     ...(from === 0 && earlier

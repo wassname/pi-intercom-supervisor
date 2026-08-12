@@ -42,11 +42,19 @@ test("the view carries the worker's latest reasoning, which pi-vcc drops", () =>
     type: "message",
     message: { role: "assistant", content: [{ type: "thinking", thinking }, { type: "text", text: "ok" }] },
   });
-  const entries = [thinker("THE OLD REASONING"), thinker("this keeps failing, I WILL RETRY THE SAME FIX")];
+  // Three blocks, not one: a worker repeating itself is the thing worth seeing, and one block
+  // shows only the newest try. Not all of them, or the view becomes a second transcript.
+  const entries = [
+    thinker("TOO OLD TO SEND"),
+    thinker("testing whether the tool output comes through, try ONE"),
+    thinker("testing whether the tool output comes through, try TWO"),
+    thinker("testing whether the tool output comes through, try THREE"),
+  ];
 
   const view = buildView({ goal: "g", status: "working", entries });
-  assert.match(view, /I WILL RETRY THE SAME FIX/);
-  assert.doesNotMatch(view, /THE OLD REASONING/, "latest only, or the view becomes a second transcript");
+  assert.match(view, /try ONE[\s\S]*try TWO[\s\S]*try THREE/, "oldest first, so a repeat reads as a repeat");
+  assert.doesNotMatch(view, /TOO OLD TO SEND/);
+  assert.match(view, /last 3 reasoning blocks/);
 
   // Redacted reasoning is empty, and then the section must not appear at all.
   const redacted = buildView({ goal: "g", status: "working", entries: [thinker("")] });
