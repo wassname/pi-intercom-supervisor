@@ -56,6 +56,10 @@ function workerModel(info: { model: string; contextPct?: number }): string {
   return info.contextPct === undefined ? info.model : `${info.model}, ${info.contextPct}% of its context used`;
 }
 
+/** Footer line id, and its marker. One glyph, because the footer is the tightest space pi has. */
+const STATUS_ID = "intercom-supervisor";
+const EYE = "◉";
+
 /** How long the supervisor waits for the worker to acknowledge a pair before giving up on it. */
 const PAIR_ACK_TIMEOUT_MS = 10_000;
 
@@ -124,6 +128,27 @@ export default function (pi: any) {
 
   function save() {
     pi.appendEntry(STATE_ENTRY, state);
+    showStatus();
+  }
+
+  /**
+   * One footer line while a pairing is live, so both terminals say what they are.
+   *
+   * A pairing is otherwise invisible after the notice at the top scrolls away. wassname started a
+   * supervisor, saw it sitting at the prompt, and could not tell that it had stopped supervising.
+   * Mechanism borrowed from @diegopetrucci/pi-oracle, which puts its run in the same place.
+   */
+  function showStatus() {
+    if (!ctx?.hasUI) return;
+    if (state.role === "none") {
+      ctx.ui.setStatus(STATUS_ID, undefined);
+      return;
+    }
+    const who = state.pairedId.slice(0, 8);
+    const text = state.role === "supervisor"
+      ? `${state.steerRounds} instructions, watching ${who}`
+      : `watched by ${who}`;
+    ctx.ui.setStatus(STATUS_ID, ctx.ui.theme.fg("accent", `${EYE} `) + ctx.ui.theme.fg("dim", text));
   }
 
   function send(message: Wire) {
@@ -325,6 +350,7 @@ export default function (pi: any) {
     // Before anything else, because a worker that can see steer and worker_view starts guessing
     // that it is a supervisor. rejoinOrDrop below may still drop the pairing and hide them again.
     showSupervisorTools(state.role === "supervisor");
+    showStatus(); // a resumed pairing has no notice to read, so the footer is all you get
     pi.events.emit(INTERCOM_EXTENSION_REGISTER_EVENT, {
       namespace: NAMESPACE,
       ownerEligible: false,

@@ -37,6 +37,13 @@ one, which is how it invents a fact. `/supervise look` does the same by hand if 
 The repeat matters because `/reload` is how a changed prompt reaches a running session, and the
 full brief goes out only at pairing.
 
+A live pairing puts one line in the footer, `◉ 3 instructions, watching 019ff4eb` in the supervisor
+and `◉ watched by 019ff4eb` in the worker. The notice printed at pairing scrolls away, and after
+that a paired session looks like any other prompt, which is how you end up staring at a supervisor
+that stopped supervising an hour ago. Same mechanism as
+[@diegopetrucci/pi-oracle](https://www.npmjs.com/package/@diegopetrucci/pi-oracle) uses for its
+runs.
+
 Subagents are skipped. `pi-subagents` registers every child run with the broker, so a worker with
 three of them running made `/supervise` refuse to pick between four sessions. Steering a subagent
 does nothing useful anyway: it dies when its task ends.
@@ -159,7 +166,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 70 tests, free apart from a ps call
+npm test                      # 72 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```

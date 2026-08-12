@@ -88,10 +88,17 @@ function harness(
   };
 
   let activeTools = ["read", "grep", "list", "bash", "edit", "write"];
+  const status = new Map<string, string | undefined>();
   const ctx = {
     cwd: process.cwd(),
     isIdle: () => isIdle,
-    ui: { notify: (m: string) => notices.push(m) },
+    hasUI: true,
+    ui: {
+      notify: (m: string) => notices.push(m),
+      // Same shape as @diegopetrucci/pi-oracle uses: setStatus(id, text) with theme.fg for colour.
+      setStatus: (id: string, text: string | undefined) => status.set(id, text),
+      theme: { fg: (_colour: string, text: string) => text },
+    },
     sessionManager: {
       getSessionId: () => ownId,
       getEntries: () => entries,
@@ -108,6 +115,7 @@ function harness(
     userMessages,
     published,
     notices,
+    status,
     async start() {
       extension(pi as any);
       for (const fn of handlers.get("session_start") ?? []) await fn({}, ctx);
@@ -729,6 +737,28 @@ test("stopping gives back the writers without undoing another extension's tools"
   const after = sup.pi.getActiveTools();
   assert.ok(after.includes("context_prune"), "the other extension's tool is still there");
   assert.ok(after.includes("bash") && after.includes("edit") && after.includes("write"), "and the writers are back");
+});
+
+test("the footer says which side of a pairing this session is, and clears when it ends", async () => {
+  // The notice at pairing scrolls away, and then a paired session looks like any other prompt.
+  // wassname could not tell that a supervisor had stopped supervising.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  assert.equal(sup.status.get("intercom-supervisor"), undefined, "nothing to say when unpaired");
+
+  await sup.run("supervise", "make the table");
+  assert.match(sup.status.get("intercom-supervisor")!, /0 instructions, watching session-/);
+  await sup.tools.get("steer")!.execute("id", { message: "run the suite" }, undefined, undefined, sup.ctx);
+  assert.match(sup.status.get("intercom-supervisor")!, /1 instructions, watching/);
+
+  await sup.run("supervise", "stop");
+  assert.equal(sup.status.get("intercom-supervisor"), undefined);
+
+  const worker = harness(WORKER_ID);
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.match(worker.status.get("intercom-supervisor")!, /watched by session-/, "the worker says so too");
 });
 
 test("a session that is not supervising never sees the supervisor tools", async () => {
