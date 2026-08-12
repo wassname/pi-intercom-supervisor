@@ -372,9 +372,13 @@ export default function (pi: any) {
       if (named.length !== 1) {
         const here = others.filter((s: any) => s.cwd === context.cwd);
         if (here.length !== 1) {
+          // The id prefix is the start of the "pi --session <id>" line pi prints in every terminal
+          // at startup, so it is something you can actually match against a window.
           const seen = others.map((s: any) => `${s.name ?? "(unnamed)"} ${s.id.slice(0, 8)} in ${s.cwd}`).join(", ");
           context.ui?.notify?.(
-            `intercom-supervisor: ${here.length} other sessions in ${context.cwd}, so name one. Seen: ${seen || "none"}`,
+            `intercom-supervisor: ${here.length} other sessions in ${context.cwd}, so say which. `
+            + `Run /name <something> in the worker, then /supervise <something> <goal>, or use the id below. `
+            + `Seen: ${seen || "none"}`,
             "error",
           );
           return;

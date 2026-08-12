@@ -614,7 +614,8 @@ test("with two other sessions here, /supervise refuses and lists what it saw", a
   await sup.run("supervise", "make the results table");
 
   assert.deepEqual(sup.published, [], "guessing between two workers is worse than asking");
-  assert.match(sup.notices.join("\n"), /2 other sessions in .*so name one/);
+  assert.match(sup.notices.join("\n"), /2 other sessions in .*so say which/);
+  assert.match(sup.notices.join("\n"), /Run \/name <something> in the worker/, "the way out, not just the problem");
   assert.match(sup.notices.join("\n"), /Seen: worker .*, other /, "both, so you can pick one");
 });
 

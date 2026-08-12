@@ -20,8 +20,18 @@ pi                                      pi
 > do the work
 ```
 
-`/supervise` takes the only other session in this directory, so the whole line is the goal. Name one
-(`/supervise worker make the table`) when there are two. `/supervise stop` ends it.
+You type one command, in one session. That session becomes the supervisor and its target becomes
+the worker, so the role is decided at pairing time and neither session is one until then. The
+worker needs no command, only the extension loaded, and it prints `supervised by <id>: <goal>` so
+you can see which one was picked.
+
+`/supervise` takes the only other session in this directory, so the whole line is the goal. With
+more than one it refuses and lists them, since guessing is worse than asking. Run `/name worker`
+in the one you want and then `/supervise worker make the table`, or use the id it printed, which
+is the start of the `pi --session <id>` line in that terminal. `/supervise stop` ends it.
+
+Working on this extension: `pi install /path/to/pi-supervise` points pi at the working tree, so
+`/reload` picks up an edit with no commit and no push.
 
 ![worker and supervisor side by side: the steer lands in the worker's transcript while the supervisor waits for the next view](media/screenshot.png)
 
