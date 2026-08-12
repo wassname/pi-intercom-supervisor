@@ -45,6 +45,16 @@ import {
   loadSupervisorPrompt,
 } from "./prompts.ts";
 
+/**
+ * The worker's model and context use, for the view header, from its own broker presence record.
+ *
+ * contextPct is missing right after a compaction and on a session with no model selected, so it is
+ * left out rather than printed as 0, which would read as an empty context.
+ */
+function workerModel(info: { model: string; contextPct?: number }): string {
+  return info.contextPct === undefined ? info.model : `${info.model}, ${info.contextPct}% of its context used`;
+}
+
 /** How long the supervisor waits for the worker to acknowledge a pair before giving up on it. */
 const PAIR_ACK_TIMEOUT_MS = 10_000;
 
@@ -74,6 +84,17 @@ const WRITER_TOOLS = new Set([
   "bash", "edit", "write", "multi_edit", "multiedit", "apply_patch", "notebook_edit",
   "edit_file", "write_file", "quick_edit", "target_edit",
 ]);
+
+/**
+ * The tools only a supervisor should have. Hidden in every session that is not supervising.
+ *
+ * Both sessions load this extension and registration happens at load, so without this a plain
+ * worker is offered worker_view, steer, wait and done. Observed 2026-08-12: a worker given an
+ * ordinary coding task spent twelve turns reasoning "these are supervisor tools ... so I might be
+ * the supervisor for a worker session", called worker_view, and read "the worker has not stopped
+ * since pairing" as proof of a pairing it never had.
+ */
+const SUPERVISOR_TOOLS = ["worker_view", "set_goal", "steer", "wait", "done"];
 
 export default function (pi: any) {
   let channel: IntercomExtensionChannel | undefined;
@@ -109,14 +130,36 @@ export default function (pi: any) {
     channel.publish(message, { audience: "capable" });
   }
 
-  /** Our own intercom session ID. The broker records pid at registration, so we match on it. */
-  async function resolveOwnId(): Promise<string> {
-    if (ownId) return ownId;
+  /**
+   * Our own record in the broker registry. The broker records pid at registration, so we match on
+   * it. Read fresh every time: presence keeps model and context use up to date in here.
+   */
+  async function ownSession(): Promise<any> {
     const sessions = await channel!.listSessions();
     const mine = sessions.find((s: any) => s.pid === process.pid);
     if (!mine) throw new Error("intercom-supervisor: this session is not registered with the intercom broker");
     ownId = mine.id;
-    return ownId;
+    return mine;
+  }
+
+  /** Our own intercom session ID, which never changes, so the first answer is kept. */
+  async function resolveOwnId(): Promise<string> {
+    return ownId || (await ownSession()).id;
+  }
+
+  /**
+   * Show or hide the supervisor tools. setActiveTools ignores names it does not know, so the list
+   * is read back: a hide that leaves them visible is the confusion this exists to stop.
+   */
+  function showSupervisorTools(on: boolean) {
+    const rest = pi.getActiveTools().filter((t: string) => !SUPERVISOR_TOOLS.includes(t));
+    pi.setActiveTools(on ? [...rest, ...SUPERVISOR_TOOLS] : rest);
+    const now = pi.getActiveTools().filter((t: string) => SUPERVISOR_TOOLS.includes(t));
+    if (on ? now.length !== SUPERVISOR_TOOLS.length : now.length > 0) {
+      throw new Error(
+        `intercom-supervisor: setActiveTools did not ${on ? "add" : "remove"} the supervisor tools, left ${now.join(", ") || "none"}`,
+      );
+    }
   }
 
   /**
@@ -181,6 +224,7 @@ export default function (pi: any) {
       pi.setActiveTools(savedTools); // supervising took the writers away, give them back
       savedTools = undefined;
     }
+    showSupervisorTools(false);
     state = { ...EMPTY_STATE };
     latestView = "";
     lastProgress = "";
@@ -270,6 +314,9 @@ export default function (pi: any) {
   pi.on("session_start", async (_event: unknown, context: any) => {
     ctx = context;
     state = restoreState(context.sessionManager.getEntries());
+    // Before anything else, because a worker that can see steer and worker_view starts guessing
+    // that it is a supervisor. rejoinOrDrop below may still drop the pairing and hide them again.
+    showSupervisorTools(state.role === "supervisor");
     pi.events.emit(INTERCOM_EXTENSION_REGISTER_EVENT, {
       namespace: NAMESPACE,
       ownerEligible: false,
@@ -299,7 +346,14 @@ export default function (pi: any) {
     // Checked here too. This view replaces the one done reads, so leaving it out would report
     // "child pi processes still running: none" and unblock done while a subagent is running.
     const subagents = await childPiProcesses();
-    const view = buildView({ goal: state.goal, status: `working, ${why}`, entries, since: sentTurns, subagents });
+    const view = buildView({
+      goal: state.goal,
+      status: `working, ${why}`,
+      entries,
+      since: sentTurns,
+      subagents,
+      model: workerModel(await ownSession()),
+    });
     sentTurns = turnsSince(entries);
     send({ t: "view", to: state.pairedId, view, stopped: false });
     debug("published mid-run view", { why, to: state.pairedId, sentTurns });
@@ -337,7 +391,15 @@ export default function (pi: any) {
       const progress = progressKey(entries);
       staleReviews = progress === lastProgress ? staleReviews + 1 : 0;
       lastProgress = progress;
-      const view = buildView({ goal: state.goal, status: "idle", entries, since: sentTurns, stale: staleReviews, subagents });
+      const view = buildView({
+        goal: state.goal,
+        status: "idle",
+        entries,
+        since: sentTurns,
+        stale: staleReviews,
+        subagents,
+        model: workerModel(await ownSession()),
+      });
       sentTurns = turnsSince(entries);
       send({ t: "view", to: state.pairedId, view, stopped: true });
       lastLook = Date.now();
@@ -429,6 +491,7 @@ export default function (pi: any) {
       }, PAIR_ACK_TIMEOUT_MS);
 
       const kept = stripWriters();
+      showSupervisorTools(true);
 
       const { prompt, source } = loadSupervisorPrompt(context.cwd);
       pi.sendUserMessage(BRIEF(prompt, goal, target));
@@ -441,9 +504,15 @@ export default function (pi: any) {
     label: "Worker view",
     description: "Read the latest view of the worker session: goal, status, files touched, problems, recent turns.",
     parameters: Type.Object({}),
-    execute: async () => ({
-      content: [{ type: "text", text: latestView || "No view received yet. The worker has not stopped since pairing." }],
-    }),
+    // Guarded like the rest. Unguarded it answered "the worker has not stopped since pairing" to a
+    // session with no pairing at all, which read as confirmation to a worker that had wondered
+    // whether it was the supervisor.
+    execute: async () => {
+      if (state.role !== "supervisor") {
+        return { content: [{ type: "text", text: "Not supervising, so there is no worker and no view." }], isError: true };
+      }
+      return { content: [{ type: "text", text: latestView || "No view received yet. The worker has not stopped since pairing." }] };
+    },
   });
 
   pi.registerTool({

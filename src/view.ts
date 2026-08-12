@@ -229,10 +229,17 @@ export interface ViewInput {
   stale?: number;
   /** Child pi processes still running. A settled worker with one of these is still spending. */
   subagents?: number[];
+  /**
+   * The worker's model and how full its context is, from the intercom presence record.
+   *
+   * A supervisor steering a small fast model should give smaller steps than one steering a frontier
+   * model, and a worker near the top of its context is about to compact and lose detail.
+   */
+  model?: string;
 }
 
 /** Render the view, and cut it to MAX_VIEW_BYTES so the broker cannot reject it. */
-export function buildView({ goal, status, entries, since = 0, stale = 0, subagents = [] }: ViewInput): string {
+export function buildView({ goal, status, entries, since = 0, stale = 0, subagents = [], model = "" }: ViewInput): string {
   const messages = entries.filter((e) => e.type === "message" && e.message);
   const errors = problems(messages);
   const pending = outstandingWork(messages);
@@ -254,6 +261,7 @@ export function buildView({ goal, status, entries, since = 0, stale = 0, subagen
     goal || "not set",
     ``,
     `# Worker`,
+    ...(model ? [`model: ${model}`] : []),
     `status: ${status}`,
     `turns: ${messages.length}`,
     `tool calls with no result: ${pending.length ? pending.join(", ") : "none"}`,

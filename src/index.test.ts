@@ -42,12 +42,15 @@ function harness(
     publish: (payload: unknown) => published.push(payload),
     commitState: () => {},
     listSessions: async () => [
-      { id: ownId, pid: process.pid, name: ownId === WORKER_ID ? "worker" : "supervisor", cwd: process.cwd() },
+      // model and contextPct are on the real SessionInfo (pi-intercom/types.ts), pushed by presence.
+      // The view header reads them off our own record, so a session missing them fails a test here.
+      { id: ownId, pid: process.pid, name: ownId === WORKER_ID ? "worker" : "supervisor", cwd: process.cwd(), model: "test/tiny", contextPct: 12 },
       {
         id: ownId === WORKER_ID ? SUPER_ID : WORKER_ID,
         pid: process.pid + 1,
         name: ownId === WORKER_ID ? "supervisor" : "worker",
         cwd: process.cwd(),
+        model: "test/tiny",
       },
       ...extraSessions,
     ],
@@ -68,7 +71,11 @@ function harness(
       handlers.set(event, [...(handlers.get(event) ?? []), fn]);
     },
     registerCommand: (name: string, opts: any) => commands.set(name, opts.handler),
-    registerTool: (tool: any) => tools.set(tool.name, tool),
+    // A registered tool is active in pi, which is why a worker could see steer and worker_view.
+    registerTool: (tool: any) => {
+      tools.set(tool.name, tool);
+      activeTools = [...activeTools, tool.name];
+    },
     appendEntry: (type: string, data: any) => appended.push({ type, data }),
     sendUserMessage: (content: string, options?: any) => userMessages.push({ content, options }),
     // On the pi API, NOT on the command context. Putting them on the context here is what hid a
@@ -484,7 +491,9 @@ test("a resume onto a live worker keeps supervising, and takes the writers back 
   assert.deepEqual(resumed.published.filter((p) => p.t === "look"), [{ t: "look", to: WORKER_ID }]);
   // The strip lives in the /supervise handler, which a resume never runs. Without this the
   // supervisor comes back with bash and edit in a directory the worker is writing to.
-  assert.deepEqual(resumed.pi.getActiveTools(), ["read", "grep", "list"]);
+  const back = resumed.pi.getActiveTools();
+  assert.deepEqual(back.filter((t: string) => ["bash", "edit", "write"].includes(t)), [], "no writers");
+  assert.ok(back.includes("steer") && back.includes("worker_view"), "and it can still supervise");
 });
 
 test("state written before recentSteers existed still loads", () => {
@@ -691,9 +700,54 @@ test("supervising takes the writing tools away, and stopping gives them back", a
   await sup.run("supervise", "g");
 
   const during = sup.pi.getActiveTools();
-  assert.deepEqual(during, ["read", "grep", "list"], "no bash, no edit, no write");
+  assert.deepEqual(
+    during,
+    ["read", "grep", "list", "worker_view", "set_goal", "steer", "wait", "done"],
+    "no bash, no edit, no write, and the supervisor tools appear",
+  );
   await sup.run("supervise", "stop");
   assert.deepEqual(sup.pi.getActiveTools(), before, "and back to what you had");
+});
+
+test("a session that is not supervising never sees the supervisor tools", async () => {
+  // Observed 2026-08-12: a worker on an ordinary coding task read its own tool list, reasoned
+  // "these are supervisor tools ... so I might be the supervisor for a worker session", and spent
+  // twelve turns on that before doing any work.
+  const worker = harness(WORKER_ID, { entries: [message("user", "do the thing")] });
+  await worker.start();
+  assert.deepEqual(
+    worker.pi.getActiveTools().filter((t: string) => ["worker_view", "set_goal", "steer", "wait", "done"].includes(t)),
+    [],
+    "an unpaired session is not offered any of them",
+  );
+
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.ok(!worker.pi.getActiveTools().includes("steer"), "and a paired worker is not either");
+});
+
+test("worker_view refuses when there is no worker, rather than implying a pairing", async () => {
+  // The old answer, "the worker has not stopped since pairing", told a session with no pairing at
+  // all that it had one.
+  const worker = harness(WORKER_ID);
+  await worker.start();
+  const seen = await worker.tools.get("worker_view")!.execute("id", {}, undefined, undefined, worker.ctx);
+  assert.equal(seen.isError, true);
+  assert.match(seen.content[0].text, /Not supervising/);
+  assert.doesNotMatch(seen.content[0].text, /since pairing/);
+});
+
+test("the view names the worker's model and how full its context is", async () => {
+  // A supervisor steering a small model should give smaller steps, and a worker near the top of
+  // its context is about to compact and lose detail. Both come off the intercom presence record.
+  const worker = harness(WORKER_ID, { entries: [message("user", "do the thing")] });
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 5));
+  await worker.settle();
+
+  const view = worker.published.find((p) => p.t === "view");
+  assert.match(view.view, /model: test\/tiny, 12% of its context used/);
 });
 
 test("supervising a second session is refused while the first is still paired", async () => {

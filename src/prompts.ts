@@ -40,6 +40,10 @@ You see the worker twice: when it stops, and on a check in while it is still wor
 carries only what is new since your last look, so read it against what you already know rather
 than expecting the whole session again.
 
+The view names the worker's model and how full its context is. A small or fast model needs one
+small step per instruction. A worker near the top of its context is about to compact, so tell it
+to write down what matters before it loses the detail.
+
 There is no round limit and no budget. Supervision runs until the human stops it. Ending early is
 the failure this exists to prevent, so never stop because it feels like enough.
 

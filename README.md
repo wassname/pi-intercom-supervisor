@@ -44,6 +44,11 @@ Working on this extension: `pi install /path/to/pi-supervise` points pi at the w
 
 ![worker and supervisor side by side: the steer lands in the worker's transcript while the supervisor waits for the next view](media/screenshot.png)
 
+The supervisor tools are hidden in a session that is not supervising. A worker that can see
+`steer` and `worker_view` starts guessing: one here, given an ordinary coding task, spent twelve
+turns reasoning "these are supervisor tools ... so I might be the supervisor", called `worker_view`,
+and took "the worker has not stopped since pairing" as proof of a pairing it never had.
+
 Both sessions load this extension and pick their role at runtime. The worker runs as ordinary pi.
 When it stops, the supervisor gets a view of it and calls `steer` with one concrete next action, or
 `done`. If it needs a human it replies in plain text instead of calling a tool, and that is what
@@ -85,6 +90,10 @@ blocks, and all of them would make the view a second transcript.
 The goal is never cut. Cutting it at 300 characters ended a real goal mid-word, and a supervisor
 cannot judge against half a sentence. The byte limit trims the transcript instead, which is the
 part that repeats.
+
+Every view names the worker's model and how full its context is, read off the worker's own intercom
+presence record. Steering a small fast model wants smaller steps than steering a frontier one, and
+a worker near the top of its context is about to compact and lose detail.
 
 Resume and `/reload` both restore the goal and the round count out of the transcript, which is
 where they belong. The paired session ID is not restored that way, because it addresses a live
@@ -148,7 +157,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 67 tests, free apart from a ps call
+npm test                      # 70 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```
