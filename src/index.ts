@@ -20,7 +20,7 @@ import type {
  */
 const INTERCOM_EXTENSION_REGISTER_EVENT = "intercom:extension-register";
 import { buildView, progressKey, turnsSince } from "./view.ts";
-import { childPiProcesses } from "./subagents.ts";
+import { childPiProcesses, spawnedPiPids } from "./subagents.ts";
 import {
   EMPTY_STATE,
   NAMESPACE,
@@ -511,11 +511,12 @@ export default function (pi: any) {
       }
 
       const me = await resolveOwnId();
-      // pi-subagents registers every child run with the broker, under an id starting "subagent".
-      // Three of those in one directory made /supervise refuse to pick the one real worker.
-      // Steering a subagent is meaningless anyway: it dies when its task ends.
+      // Child runs are not workers: they die when their task ends, so steering one is meaningless.
+      // Two ways to spot them, because neither catches all. pi-subagents sets an id starting
+      // "subagent" when it passes an intercom target, and every child pi has a pi for a parent.
+      const spawned = await spawnedPiPids();
       const others = (await channel.listSessions())
-        .filter((s: any) => s.id !== me && !s.id.startsWith("subagent"));
+        .filter((s: any) => s.id !== me && !s.id.startsWith("subagent") && !spawned.has(s.pid));
       // The id prefix is the start of the "pi --session <id>" line pi prints in every terminal at
       // startup, so it is something you can match against a window.
       const seen = others.map((s: any) => `${s.name ?? "(unnamed)"} ${s.id.slice(0, 8)} in ${s.cwd}`).join(", ");

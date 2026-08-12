@@ -51,9 +51,13 @@ to its own line for the whole session, unlike a status that shows only during a 
 [@diegopetrucci/pi-oracle](https://www.npmjs.com/package/@diegopetrucci/pi-oracle) uses for its
 runs.
 
-Subagents are skipped. `pi-subagents` registers every child run with the broker, so a worker with
-three of them running made `/supervise` refuse to pick between four sessions. Steering a subagent
-does nothing useful anyway: it dies when its task ends.
+Child runs are skipped, and the test is the process tree: a pi whose parent is another pi did not
+come from you. That covers a `pi-subagents` run, an oracle run, and a pi started from a `bash` call.
+A worker with three subagents made `/supervise` refuse to pick between four sessions, and steering
+one is pointless anyway, because it dies when its task ends. The name is not a reliable test.
+`pi-subagents` sets an id starting `subagent` only when it passes an intercom target; without one
+the child registers under its own session id, and `pi-intercom` then calls it `subagent-chat-<id>`,
+which is its name for any session you have not named.
 
 Working on this extension: `pi install /path/to/pi-supervise` points pi at the working tree, so
 `/reload` picks up an edit with no commit and no push.
@@ -175,7 +179,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 75 tests, free apart from a ps call
+npm test                      # 76 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```
