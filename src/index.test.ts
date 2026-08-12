@@ -22,7 +22,10 @@ const WORKER_ID = "session-worker";
 const SUPER_ID = "session-supervisor";
 
 /** Fake ExtensionAPI, same shape as pi-intercom's own test harness. */
-function harness(ownId: string, { entries = [] as any[], isIdle = true, branch = undefined as any[] | undefined } = {}) {
+function harness(
+  ownId: string,
+  { entries = [] as any[], isIdle = true, branch = undefined as any[] | undefined, extraSessions = [] as any[] } = {},
+) {
   const bus = new EventEmitter();
   const handlers = new Map<string, Array<(e: any, c: any) => any>>();
   const commands = new Map<string, (args: string, ctx: any) => any>();
@@ -39,8 +42,14 @@ function harness(ownId: string, { entries = [] as any[], isIdle = true, branch =
     publish: (payload: unknown) => published.push(payload),
     commitState: () => {},
     listSessions: async () => [
-      { id: ownId, pid: process.pid, name: ownId === WORKER_ID ? "worker" : "supervisor" },
-      { id: ownId === WORKER_ID ? SUPER_ID : WORKER_ID, pid: process.pid + 1, name: ownId === WORKER_ID ? "supervisor" : "worker" },
+      { id: ownId, pid: process.pid, name: ownId === WORKER_ID ? "worker" : "supervisor", cwd: process.cwd() },
+      {
+        id: ownId === WORKER_ID ? SUPER_ID : WORKER_ID,
+        pid: process.pid + 1,
+        name: ownId === WORKER_ID ? "supervisor" : "worker",
+        cwd: process.cwd(),
+      },
+      ...extraSessions,
     ],
   };
 
@@ -64,9 +73,14 @@ function harness(ownId: string, { entries = [] as any[], isIdle = true, branch =
     sendUserMessage: (content: string, options?: any) => userMessages.push({ content, options }),
   };
 
+  let activeTools = ["read", "grep", "list", "bash", "edit", "write"];
   const ctx = {
     cwd: process.cwd(),
     isIdle: () => isIdle,
+    getActiveTools: () => activeTools,
+    setActiveTools: (names: string[]) => {
+      activeTools = names;
+    },
     ui: { notify: (m: string) => notices.push(m) },
     sessionManager: {
       getSessionId: () => ownId,
@@ -487,6 +501,53 @@ test("the view of the old worker cannot be used to judge the new one", async () 
 
   const seen = await sup.tools.get("worker_view")!.execute("id", {}, undefined, undefined, sup.ctx);
   assert.doesNotMatch(seen.content[0].text, /old worker/);
+});
+
+test("with one other session here, /supervise needs no target and the whole line is the goal", async () => {
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "make the results table");
+
+  const pair = sup.published.find((p) => p.t === "pair");
+  assert.equal(pair.to, WORKER_ID, "the only other session in this directory is the worker");
+  assert.equal(pair.goal, "make the results table", "no word of that is a target");
+});
+
+test("naming the worker still works, and the rest of the line is the goal", async () => {
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "worker make the results table");
+  assert.deepEqual(sup.published.find((p) => p.t === "pair"), {
+    t: "pair",
+    to: WORKER_ID,
+    goal: "make the results table",
+  });
+});
+
+test("with two other sessions here, /supervise refuses and lists what it saw", async () => {
+  const sup = harness(SUPER_ID, {
+    extraSessions: [{ id: "session-third", pid: 999, name: "other", cwd: process.cwd() }],
+  });
+  await sup.start();
+  await sup.run("supervise", "make the results table");
+
+  assert.deepEqual(sup.published, [], "guessing between two workers is worse than asking");
+  assert.match(sup.notices.join("\n"), /2 other sessions in .*so name one/);
+  assert.match(sup.notices.join("\n"), /Seen: worker .*, other /, "both, so you can pick one");
+});
+
+test("supervising takes the writing tools away, and stopping gives them back", async () => {
+  // The supervisor shares a working directory with the worker, so a supervisor that can write is a
+  // second agent editing the same files.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  const before = sup.ctx.getActiveTools();
+  await sup.run("supervise", "g");
+
+  const during = sup.ctx.getActiveTools();
+  assert.deepEqual(during, ["read", "grep", "list"], "no bash, no edit, no write");
+  await sup.run("supervise", "stop");
+  assert.deepEqual(sup.ctx.getActiveTools(), before, "and back to what you had");
 });
 
 test("supervising a second session is refused while the first is still paired", async () => {

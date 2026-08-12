@@ -13,17 +13,23 @@ the widget and the plugin API: 5201 lines of `src` down to 788.
 
 ```
 # terminal 1, the worker                # terminal 2, the supervisor
-pi -n worker                            pi -n supervisor
-                                        /supervise worker make the results table
+pi                                      pi
+                                        /supervise make the results table
 > do the work
 ```
+
+`/supervise` takes the only other session in this directory, so the whole line is the goal. Name one
+(`/supervise worker make the table`) when there are two. `/supervise stop` ends it.
 
 ![worker and supervisor side by side: the steer lands in the worker's transcript while the supervisor waits for the next view](media/screenshot.png)
 
 Both sessions load this extension and pick their role at runtime. The worker runs as ordinary pi.
 When it stops, the supervisor gets a view of it and calls `steer` with one concrete next action, or
 `done`. If it needs a human it replies in plain text instead of calling a tool, and that is what
-reaches your phone. Policy comes from `<cwd>/.pi/SUPERVISOR.md`, then `<agent dir>/SUPERVISOR.md`,
+reaches your phone. Supervising takes the writing tools off that session, `bash` and the edit tools,
+and gives them back when supervision ends: it shares a working directory with the worker, and two
+agents writing the same files is not supervision. It keeps `read` and `grep`, because checking a
+claim against a file is the job. Policy comes from `<cwd>/.pi/SUPERVISOR.md`, then `<agent dir>/SUPERVISOR.md`,
 then a built-in default, same precedence as the original, so an existing file keeps working. A
 verdict here is a tool call, so nothing can fail to parse.
 
@@ -87,7 +93,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 52 tests, free apart from a ps call
+npm test                      # 56 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```

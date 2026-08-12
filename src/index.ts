@@ -40,6 +40,21 @@ const PAIR_ACK_TIMEOUT_MS = 10_000;
  */
 const WATCH_INTERVAL_MS = 120_000;
 
+/**
+ * Tools taken away from a supervising session, and given back when supervision ends.
+ *
+ * The supervisor shares a working directory with the worker, so a supervisor that can write is a
+ * second agent editing the same files at the same time. It keeps read, grep and the rest, because
+ * checking a claim against a file is its job. If it wants a command run, it steers the worker.
+ *
+ * A deny list, not an allow list: a read tool named something unexpected stays available rather
+ * than silently disappearing. The kept list is printed, so a writer this misses is visible.
+ */
+const WRITER_TOOLS = new Set([
+  "bash", "edit", "write", "multi_edit", "multiedit", "apply_patch", "notebook_edit",
+  "edit_file", "write_file", "quick_edit", "target_edit",
+]);
+
 export default function (pi: any) {
   let channel: IntercomExtensionChannel | undefined;
   let state: SuperviseState = { ...EMPTY_STATE };
@@ -55,6 +70,8 @@ export default function (pi: any) {
   let turnStartedAt = 0;
   /** Supervisor side: cleared when the worker acknowledges the pair. */
   let pairTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Supervisor side: the tools this session had before supervising took the writers away. */
+  let savedTools: string[] | undefined;
 
   /** PI_SUPERVISOR_DEBUG=1 traces the wire to stderr. The channel is invisible in transcripts. */
   const debug = (event: string, detail: unknown = {}) => {
@@ -86,6 +103,10 @@ export default function (pi: any) {
     pairTimer = undefined;
     clearInterval(watchTimer);
     watchTimer = undefined;
+    if (savedTools) {
+      ctx?.setActiveTools?.(savedTools); // supervising took the writers away, give them back
+      savedTools = undefined;
+    }
     state = { ...EMPTY_STATE };
     latestView = "";
     lastProgress = "";
@@ -245,7 +266,7 @@ export default function (pi: any) {
   // ---- supervisor side: one command and three tools ---------------------------------------
 
   pi.registerCommand("supervise", {
-    description: "Supervise another pi session: /supervise <name|id> [goal], or /supervise stop",
+    description: "Supervise the other pi session here: /supervise [goal], /supervise <name|id> [goal], /supervise stop",
     handler: async (args: string, context: any) => {
       ctx = context;
       const text = args.trim();
@@ -253,7 +274,7 @@ export default function (pi: any) {
         context.ui?.notify?.("intercom-supervisor: intercom is not connected", "error");
         return;
       }
-      if (text === "stop" || text === "") {
+      if (text === "stop") {
         if (state.pairedId) send({ t: "unpair", to: state.pairedId });
         reset("supervision stopped");
         return;
@@ -266,18 +287,31 @@ export default function (pi: any) {
         return;
       }
 
-      const [target, ...rest] = text.split(/\s+/);
-      const goal = rest.join(" ");
-      const sessions = await channel.listSessions();
       const me = await resolveOwnId();
-      const matches = sessions.filter((s: any) => s.id !== me && (s.id === target || s.name === target));
-      if (matches.length !== 1) {
-        const names = sessions.map((s: any) => `${s.name ?? "(unnamed)"} ${s.id.slice(0, 8)}`).join(", ");
-        context.ui?.notify?.(`intercom-supervisor: ${matches.length} sessions match "${target}". Seen: ${names}`, "error");
-        return;
-      }
+      const others = (await channel.listSessions()).filter((s: any) => s.id !== me);
+      const [first, ...rest] = text.split(/\s+/);
+      const named = others.filter((s: any) => s.id === first || s.name === first);
 
-      state = { ...EMPTY_STATE, role: "supervisor", pairedId: matches[0].id, goal };
+      // Naming a worker is optional. With one other session in this directory, that is the worker,
+      // and everything you typed is the goal. Only a first word that matches a session is a target.
+      let worker = named[0];
+      let goal = rest.join(" ");
+      if (named.length !== 1) {
+        const here = others.filter((s: any) => s.cwd === context.cwd);
+        if (here.length !== 1) {
+          const seen = others.map((s: any) => `${s.name ?? "(unnamed)"} ${s.id.slice(0, 8)} in ${s.cwd}`).join(", ");
+          context.ui?.notify?.(
+            `intercom-supervisor: ${here.length} other sessions in ${context.cwd}, so name one. Seen: ${seen || "none"}`,
+            "error",
+          );
+          return;
+        }
+        worker = here[0];
+        goal = text;
+      }
+      const target = worker.name ?? worker.id.slice(0, 8);
+
+      state = { ...EMPTY_STATE, role: "supervisor", pairedId: worker.id, goal };
       latestView = "";
       save();
       send({ t: "pair", to: state.pairedId, goal });
@@ -290,9 +324,18 @@ export default function (pi: any) {
         reset(`intercom-supervisor: ${target} never acknowledged. It probably does not load this extension.`);
       }, PAIR_ACK_TIMEOUT_MS);
 
+      // Supervising is a read-only job in a directory another agent is writing to. Taken back in
+      // reset(), so /supervise stop, done and unpair all restore what you had.
+      const before: string[] = context.getActiveTools?.() ?? [];
+      const kept = before.filter((t: string) => !WRITER_TOOLS.has(t.toLowerCase()));
+      if (kept.length < before.length) {
+        savedTools = before;
+        context.setActiveTools(kept);
+      }
+
       const { prompt, source } = loadSupervisorPrompt(context.cwd);
-      pi.sendUserMessage(BRIEF(prompt, goal, matches[0].name ?? state.pairedId.slice(0, 8)));
-      context.ui?.notify?.(`supervising ${matches[0].name ?? state.pairedId.slice(0, 8)} (policy: ${source})`, "info");
+      pi.sendUserMessage(BRIEF(prompt, goal, target));
+      context.ui?.notify?.(`supervising ${target} (policy: ${source}, tools: ${kept.join(", ") || "unchanged"})`, "info");
     },
   });
 
