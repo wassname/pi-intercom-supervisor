@@ -56,6 +56,11 @@ compactor (no LLM calls) you can run as your own. On top of it the view carries 
 has no reason to track: tool calls with no result, child pi processes, tool errors, and whether
 anything changed since the last review.
 
+It also carries the worker's latest reasoning block, which pi-vcc drops and which you see on
+screen when you watch a session. A worker going in circles says so there first, while it names
+the approach it is about to retry, before any file or commit changes. Only the newest block, and
+only its last 1200 characters, since a reasoning block ends on what it decided to do.
+
 The supervisor looks at a working worker every half hour, and again whenever the worker stops.
 Those two looks ask for different things. A stop is a decision point. A check in leans on `wait`,
 because interrupting a working agent costs it its train of thought. The original also ran two
@@ -111,7 +116,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 61 tests, free apart from a ps call
+npm test                      # 62 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```

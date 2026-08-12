@@ -19,6 +19,8 @@ export interface Block {
   type: string;
   id?: string;
   text?: string;
+  /** Set on `type: "thinking"` blocks. Empty when the provider redacted the reasoning. */
+  thinking?: string;
   name?: string;
   arguments?: Record<string, unknown>;
 }
@@ -144,6 +146,22 @@ export function turnsSince(entries: Entry[]): number {
   return messagesSince(entries).length;
 }
 
+/**
+ * The worker's latest reasoning. pi-vcc's normalize keeps only text and toolCall blocks, so
+ * without this the supervisor never sees it, though you do when you watch the session.
+ *
+ * This is where a stuck worker says so first: it names the approach it is about to retry again
+ * before any file or commit changes, which is all the stagnation count can see. Latest block
+ * only, because the point is what it is thinking now, not a second transcript.
+ */
+export function latestThinking(msgs: AgentMsg[]): string {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const think = blocks(msgs[i]).filter((b) => b.type === "thinking").at(-1);
+    if (think?.thinking) return think.thinking;
+  }
+  return "";
+}
+
 const VCC_SEPARATOR = "\n\n---\n\n";
 /** pi-vcc's section names, in the order formatSummary writes them (its format.ts). */
 const VCC_HEADERS = ["Session Goal", "Files And Changes", "Commits", "Outstanding Context", "User Preferences"];
@@ -155,14 +173,13 @@ const VCC_HEADERS = ["Session Goal", "Files And Changes", "Commits", "Outstandin
  * all four combinations are possible. Get this wrong and the header block lands in the transcript,
  * where the byte cut eats the newest turns instead of the oldest.
  */
-function vccSections(entries: Entry[], since: number): { headers: string; brief: string } {
+function vccSections(fresh: AgentMsg[]): { headers: string; brief: string } {
   // No previousSummary: compile's merge reads the fresh brief with briefOf, which finds nothing
   // when the fresh messages produced no header sections, and the newest turns vanish. The
   // compaction summary goes into the view above this instead, which loses nothing.
   //
   // compile appends a note telling the reader to call vcc_recall, which the supervisor does not
   // have. Matched on the tool name because wrapLongLines rewraps the note before we see it.
-  const fresh = messagesSince(entries).slice(since);
   const compiled = compile({ messages: fresh as any })
     .replace(/\n*-*\n*Use `vcc_recall`[\s\S]*$/, "")
     .trim();
@@ -201,7 +218,9 @@ export function buildView({ goal, status, entries, since = 0, stale = 0, subagen
   // otherwise the supervisor silently reads a slice of the wrong history.
   const restarted = since > total;
   const from = restarted ? 0 : since;
-  const { headers, brief } = vccSections(entries, from);
+  const fresh = messagesSince(entries).slice(from);
+  const { headers, brief } = vccSections(fresh);
+  const thinking = latestThinking(fresh);
   const earlier = compactionSummary(entries);
 
   const head = [
@@ -219,6 +238,9 @@ export function buildView({ goal, status, entries, since = 0, stale = 0, subagen
     `# Problems`,
     errors.length ? errors.join("\n") : "none",
     ``,
+    // Tail, not head: a reasoning block ends on what it decided to do, which is the part a
+    // steer has to answer. Absent on a provider that redacts reasoning, and that is fine.
+    ...(thinking ? [`# The worker's latest reasoning, the end of it`, thinking.slice(-1200), ``] : []),
     // Sent when this view starts at the compaction boundary, which is the first view and every
     // view after the worker compacts. In between the supervisor already has it.
     ...(from === 0 && earlier

@@ -34,6 +34,25 @@ test("a view carries only the turns the supervisor has not been sent", () => {
   assert.match(next, /# New turns since your last look \(1 of 3\)/);
 });
 
+test("the view carries the worker's latest reasoning, which pi-vcc drops", () => {
+  // Block shape read out of a real session jsonl, where an assistant entry held 2 thinking
+  // blocks. pi-vcc's normalize keeps only text and toolCall, so a stuck worker saying so in
+  // its reasoning reaches nobody. That is the earliest sign of a loop we can see.
+  const thinker = (thinking: string): Entry => ({
+    type: "message",
+    message: { role: "assistant", content: [{ type: "thinking", thinking }, { type: "text", text: "ok" }] },
+  });
+  const entries = [thinker("THE OLD REASONING"), thinker("this keeps failing, I WILL RETRY THE SAME FIX")];
+
+  const view = buildView({ goal: "g", status: "working", entries });
+  assert.match(view, /I WILL RETRY THE SAME FIX/);
+  assert.doesNotMatch(view, /THE OLD REASONING/, "latest only, or the view becomes a second transcript");
+
+  // Redacted reasoning is empty, and then the section must not appear at all.
+  const redacted = buildView({ goal: "g", status: "working", entries: [thinker("")] });
+  assert.doesNotMatch(redacted, /latest reasoning/);
+});
+
 test("a compaction restarts the view, so no turn falls into the gap", () => {
   // getBranch keeps the entries a compaction replaced, so the mark now points past the end. Read
   // the wrong slice here and the supervisor silently reads a piece of the old history.
