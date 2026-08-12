@@ -26,7 +26,14 @@ export function loadSupervisorPrompt(cwd: string): { prompt: string; source: str
   return { prompt: DEFAULT_SUPERVISOR_PROMPT, source: "built-in" };
 }
 
-/** Sent once when pairing, so the supervisor knows its job before the first view arrives. */
+/**
+ * Sent once when pairing, so the supervisor knows its job before the first view arrives.
+ *
+ * The last line used to read "Reply with exactly: watching". Observed in session
+ * 019ff4eb-c66c on 2026-08-12: deepseek-v4-flash obeyed it, then answered both later views with
+ * the plain word "wait" and made no tool call at all, so two views produced nothing. A text
+ * answer on turn one teaches the shape for every turn after it.
+ */
 export const BRIEF = (policy: string, goal: string, worker: string) =>
   `${policy}
 
@@ -47,7 +54,9 @@ to write down what matters before it loses the detail.
 There is no round limit and no budget. Supervision runs until the human stops it. Ending early is
 the failure this exists to prevent, so never stop because it feels like enough.
 
-Do not act yet. The first view arrives on its own. Reply with exactly: watching`;
+Do not act yet. The first view arrives on its own. Answer this message by calling the wait tool,
+with the reason "paired, waiting for the first view". Make the first answer a tool call, because
+every answer after it is a tool call too.`;
 
 /**
  * The three verdicts. These live in the tool descriptions, which the API sends at every model call,
@@ -85,7 +94,8 @@ export const REVIEW_NUDGE = (view: string, rounds: number, stopped: boolean) =>
 
 ${view}
 
-${rounds} instructions so far. Decide: steer, done, or wait.`
+${rounds} instructions so far. Answer with one tool call: steer, done or wait. The word on its own
+does nothing; only the call reaches the worker.`
     : `Checking in on the worker, which is still going.
 
 ${view}
