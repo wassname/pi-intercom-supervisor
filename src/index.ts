@@ -113,8 +113,8 @@ export default function (pi: any) {
   let turnStartedAt = 0;
   /** Supervisor side: cleared when the worker acknowledges the pair. */
   let pairTimer: ReturnType<typeof setTimeout> | undefined;
-  /** Supervisor side: the tools this session had before supervising took the writers away. */
-  let savedTools: string[] | undefined;
+  /** Supervisor side: the writer tools this session had, so reset gives back exactly those. */
+  let removedWriters: string[] = [];
 
   /** PI_SUPERVISOR_DEBUG=1 traces the wire to stderr. The channel is invisible in transcripts. */
   const debug = (event: string, detail: unknown = {}) => {
@@ -174,7 +174,10 @@ export default function (pi: any) {
   function stripWriters(): string[] {
     const before: string[] = pi.getActiveTools();
     const kept = before.filter((t: string) => !WRITER_TOOLS.has(t.toLowerCase()));
-    savedTools = before;
+    // Remember the names removed, not the whole list. Other extensions add and remove their own
+    // tools while supervision runs (pi-context-prune adds context_prune, pi-telegram suspends its
+    // own), so restoring a snapshot taken hours ago would silently undo their decisions.
+    removedWriters = before.filter((t: string) => WRITER_TOOLS.has(t.toLowerCase()));
     pi.setActiveTools(kept);
     const still = pi.getActiveTools().filter((t: string) => WRITER_TOOLS.has(t.toLowerCase()));
     if (still.length) throw new Error(`intercom-supervisor: setActiveTools did not remove ${still.join(", ")}`);
@@ -220,9 +223,9 @@ export default function (pi: any) {
     pairTimer = undefined;
     clearInterval(watchTimer);
     watchTimer = undefined;
-    if (savedTools) {
-      pi.setActiveTools(savedTools); // supervising took the writers away, give them back
-      savedTools = undefined;
+    if (removedWriters.length) {
+      pi.setActiveTools([...pi.getActiveTools(), ...removedWriters]); // give back what we took
+      removedWriters = [];
     }
     showSupervisorTools(false);
     state = { ...EMPTY_STATE };

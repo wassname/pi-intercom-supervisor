@@ -709,6 +709,21 @@ test("supervising takes the writing tools away, and stopping gives them back", a
   assert.deepEqual(sup.pi.getActiveTools(), before, "and back to what you had");
 });
 
+test("stopping gives back the writers without undoing another extension's tools", async () => {
+  // pi-context-prune adds context_prune and pi-telegram suspends its own tools, both by reading the
+  // active list and changing one name (pi-context-prune/index.ts:376-388). Restoring a whole list
+  // saved hours earlier would silently undo whatever they decided in between.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "g");
+  sup.pi.setActiveTools([...sup.pi.getActiveTools(), "context_prune"]);
+
+  await sup.run("supervise", "stop");
+  const after = sup.pi.getActiveTools();
+  assert.ok(after.includes("context_prune"), "the other extension's tool is still there");
+  assert.ok(after.includes("bash") && after.includes("edit") && after.includes("write"), "and the writers are back");
+});
+
 test("a session that is not supervising never sees the supervisor tools", async () => {
   // Observed 2026-08-12: a worker on an ordinary coding task read its own tool list, reasoned
   // "these are supervisor tools ... so I might be the supervisor for a worker session", and spent
