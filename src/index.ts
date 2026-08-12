@@ -41,6 +41,7 @@ import {
   TOOL_DONE,
   TOOL_STEER,
   TOOL_WAIT,
+  WAIT_ACK,
   loadSupervisorPrompt,
 } from "./prompts.ts";
 
@@ -499,7 +500,7 @@ Tell them in your reply, quoting it, so they can correct it.`,
       if (state.role !== "supervisor") {
         return { content: [{ type: "text", text: "Not supervising." }], isError: true };
       }
-      return { content: [{ type: "text", text: `Waiting: ${params.reason}` }] };
+      return { content: [{ type: "text", text: WAIT_ACK(params.reason) }] };
     },
   });
 

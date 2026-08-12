@@ -50,7 +50,15 @@ Do not act yet. The first view arrives on its own. Reply with exactly: watching`
  * so they are the only instructions here that a supervisor compaction cannot lose.
  */
 export const TOOL_WAIT =
-  "The worker is on track and needs no instruction. The usual answer at a check in. Costs nothing and reaches nobody.";
+  "The worker is on track and needs no instruction. The usual answer at a check in. Costs nothing and reaches nobody."
+  + " Call it once and then stop. The next view wakes you by itself.";
+
+/**
+ * Observed 2026-08-12: a supervisor called wait four times in a row, then wrote "I keep calling
+ * wait in a loop ... I should end my turn now". A tool result reads as a prompt to act again, so
+ * the result says the turn is over rather than leaving the model to work that out.
+ */
+export const WAIT_ACK = (reason: string) => `Waiting: ${reason}\n\nRecorded. Your turn is over. Say nothing more until the next view arrives.`;
 export const TOOL_STEER =
   "Send one concrete next action to the worker. It arrives as a user message in the worker session, so it interrupts.";
 export const TOOL_DONE =

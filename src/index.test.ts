@@ -397,6 +397,19 @@ test("a loop still gets named after the supervisor compacts, from restored state
   assert.match(again.content[0].text, /says much the same as instruction 1/);
 });
 
+test("waiting says the turn is over, so wait is not called four times running", async () => {
+  // Observed 2026-08-12 in session 019ff458-4578: wait at 06:21:52, 06:22:13, 06:22:25 and
+  // 06:22:32, then "I keep calling wait in a loop ... I should end my turn now". A tool result
+  // reads as a prompt to act again, so the result has to say the turn is finished.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "worker make the results table");
+
+  const result = await sup.tools.get("wait")!.execute("id", { reason: "job 291 is at 305 of 600" }, undefined, undefined, sup.ctx);
+  assert.match(result.content[0].text, /job 291 is at 305 of 600/, "the reason is still recorded");
+  assert.match(result.content[0].text, /turn is over/);
+});
+
 test("a resume onto a session that is gone drops the pairing and says so", async () => {
   // What wassname hit: resume a supervisor, it sits idle still claiming a pairing, prints nothing,
   // and refuses /supervise until you work out it wants /supervise stop. pairedId addresses a live
