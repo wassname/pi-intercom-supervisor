@@ -71,16 +71,19 @@ function harness(
     registerTool: (tool: any) => tools.set(tool.name, tool),
     appendEntry: (type: string, data: any) => appended.push({ type, data }),
     sendUserMessage: (content: string, options?: any) => userMessages.push({ content, options }),
+    // On the pi API, NOT on the command context. Putting them on the context here is what hid a
+    // real bug: the live command handler threw "context.getActiveTools is not a function", and
+    // before that the optional call returned undefined and the strip skipped in silence.
+    getActiveTools: () => activeTools,
+    setActiveTools: (names: string[]) => {
+      activeTools = names;
+    },
   };
 
   let activeTools = ["read", "grep", "list", "bash", "edit", "write"];
   const ctx = {
     cwd: process.cwd(),
     isIdle: () => isIdle,
-    getActiveTools: () => activeTools,
-    setActiveTools: (names: string[]) => {
-      activeTools = names;
-    },
     ui: { notify: (m: string) => notices.push(m) },
     sessionManager: {
       getSessionId: () => ownId,
@@ -397,6 +400,26 @@ test("a loop still gets named after the supervisor compacts, from restored state
   assert.match(again.content[0].text, /says much the same as instruction 1/);
 });
 
+test("subagent sessions are not offered as workers", async () => {
+  // Real ids from wassname's terminal 2026-08-12: pi-subagents registers every child run with the
+  // broker, so /supervise saw "3 other sessions" and refused to pick the one real worker.
+  // Steering a subagent is meaningless anyway, it dies when its task ends.
+  const sup = harness(SUPER_ID, {
+    extraSessions: [
+      { id: "subagent-worker-5cf604b2-1", pid: 1, name: "subagent-worker-5cf604b2-1", cwd: process.cwd() },
+      { id: "subagent-worker-13e6255a-1", pid: 2, name: "subagent-worker-13e6255a-1", cwd: process.cwd() },
+    ],
+  });
+  await sup.start();
+  await sup.run("supervise", "make the results table");
+
+  assert.deepEqual(
+    sup.published.filter((p) => p.t === "pair"),
+    [{ t: "pair", to: WORKER_ID, goal: "make the results table" }],
+    "the one real session here is the worker, whatever the subagents are doing",
+  );
+});
+
 test("/supervise look asks the worker for a fresh view, rather than the supervisor guessing", async () => {
   // A supervisor whose turn ended without a view has no way back: only the worker makes views.
   // wassname hit this when the supervisor died on an OpenRouter 402, and poking it with "," made
@@ -455,10 +478,13 @@ test("a resume onto a live worker keeps supervising, and takes the writers back 
   await resumed.start();
   await new Promise((r) => setTimeout(r, 5));
 
-  assert.ok(resumed.notices.some((n) => /still supervisor with/.test(n)), resumed.notices.join(" | "));
+  assert.ok(resumed.notices.some((n) => /still supervising/.test(n)), resumed.notices.join(" | "));
+  // Asking beats waiting. A supervisor back from a crash or a /reload holds a stale picture, and
+  // only the worker makes views. Nobody should have to know that, so a restart is the whole cure.
+  assert.deepEqual(resumed.published.filter((p) => p.t === "look"), [{ t: "look", to: WORKER_ID }]);
   // The strip lives in the /supervise handler, which a resume never runs. Without this the
   // supervisor comes back with bash and edit in a directory the worker is writing to.
-  assert.deepEqual(resumed.ctx.getActiveTools(), ["read", "grep", "list"]);
+  assert.deepEqual(resumed.pi.getActiveTools(), ["read", "grep", "list"]);
 });
 
 test("state written before recentSteers existed still loads", () => {
@@ -661,13 +687,13 @@ test("supervising takes the writing tools away, and stopping gives them back", a
   // second agent editing the same files.
   const sup = harness(SUPER_ID);
   await sup.start();
-  const before = sup.ctx.getActiveTools();
+  const before = sup.pi.getActiveTools();
   await sup.run("supervise", "g");
 
-  const during = sup.ctx.getActiveTools();
+  const during = sup.pi.getActiveTools();
   assert.deepEqual(during, ["read", "grep", "list"], "no bash, no edit, no write");
   await sup.run("supervise", "stop");
-  assert.deepEqual(sup.ctx.getActiveTools(), before, "and back to what you had");
+  assert.deepEqual(sup.pi.getActiveTools(), before, "and back to what you had");
 });
 
 test("supervising a second session is refused while the first is still paired", async () => {

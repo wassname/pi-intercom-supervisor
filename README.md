@@ -30,10 +30,14 @@ more than one it refuses and lists them, since guessing is worse than asking. Ru
 in the one you want and then `/supervise worker make the table`, or use the id it printed, which
 is the start of the `pi --session <id>` line in that terminal. `/supervise stop` ends it.
 
-`/supervise look` asks the worker for a view now. Only the worker makes views, so a supervisor
-whose turn ended without one has no way back: after a crash, a credit failure or a `/reload` it is
-holding a stale picture. Poking it with a bare message makes it answer from that stale picture,
-which is how it invents a fact. Ask for a view instead.
+A supervisor that comes back from a crash, a credit failure or a `/reload` asks the worker for a
+view by itself, so restarting the session is the whole recovery. Only the worker makes views, and
+a supervisor holding a stale one answers from the stale one, which is how it invents a fact.
+`/supervise look` does the same by hand if you want it now.
+
+Subagents are skipped. `pi-subagents` registers every child run with the broker, so a worker with
+three of them running made `/supervise` refuse to pick between four sessions. Steering a subagent
+does nothing useful anyway: it dies when its task ends.
 
 Working on this extension: `pi install /path/to/pi-supervise` points pi at the working tree, so
 `/reload` picks up an edit with no commit and no push.
@@ -144,7 +148,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 66 tests, free apart from a ps call
+npm test                      # 67 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```

@@ -123,18 +123,17 @@ export default function (pi: any) {
    * Take the writing tools off this session. Supervising is a read-only job in a directory
    * another agent is writing to. reset() hands them back.
    *
-   * Observed 2026-08-12: a supervisor made 36 bash calls in the same session that ran /supervise,
-   * 65 seconds after the brief, with no resume in between (session 019ff458-4578). So the strip
-   * did nothing and said nothing. It used to skip quietly when the list came back the same size,
-   * which hides both an empty getActiveTools and a tool named something this list misses. Now the
-   * kept list is always printed and the deny list is checked against what was really there.
+   * These live on the pi API, not on the command context. Reaching for the context is what let a
+   * supervisor make 36 bash calls in the session that ran /supervise: the old code wrote
+   * context.getActiveTools?.() ?? [], got undefined, kept an empty list, and skipped in silence.
+   * Unguarded now, and the list is read back, so a strip that does nothing throws instead.
    */
-  function stripWriters(context: any): string[] {
-    const before: string[] = context.getActiveTools();
+  function stripWriters(): string[] {
+    const before: string[] = pi.getActiveTools();
     const kept = before.filter((t: string) => !WRITER_TOOLS.has(t.toLowerCase()));
     savedTools = before;
-    context.setActiveTools(kept);
-    const still = context.getActiveTools().filter((t: string) => WRITER_TOOLS.has(t.toLowerCase()));
+    pi.setActiveTools(kept);
+    const still = pi.getActiveTools().filter((t: string) => WRITER_TOOLS.has(t.toLowerCase()));
     if (still.length) throw new Error(`intercom-supervisor: setActiveTools did not remove ${still.join(", ")}`);
     return kept;
   }
@@ -157,13 +156,19 @@ export default function (pi: any) {
       reset(`intercom-supervisor: ${state.pairedId.slice(0, 8)} is gone, so the pairing is dropped. Run /supervise to start again.`);
       return;
     }
+    if (state.role !== "supervisor") {
+      ctx?.ui?.notify?.(`intercom-supervisor: still supervised by ${state.pairedId.slice(0, 8)}`, "info");
+      return;
+    }
     // The strip lives in the /supervise handler and savedTools is memory, so a resumed supervisor
     // has bash and the edit tools back in a directory the worker is writing to.
-    if (state.role === "supervisor") stripWriters(ctx);
-    ctx?.ui?.notify?.(
-      `intercom-supervisor: still ${state.role} with ${state.pairedId.slice(0, 8)}, waiting for the next view`,
-      "info",
-    );
+    stripWriters();
+    // Ask for a view rather than wait for one. A supervisor that came back from a crash, a credit
+    // failure or a /reload holds a stale picture, and answering from a stale picture is how it
+    // invents a fact. Only the worker makes views, so it has to ask, and nobody should have to
+    // know that: restarting the session is the whole recovery.
+    send({ t: "look", to: state.pairedId });
+    ctx?.ui?.notify?.(`intercom-supervisor: still supervising ${state.pairedId.slice(0, 8)}, asked it for a view`, "info");
   }
 
   /** Everything that ends a pairing goes through here, so no stale view or timer survives it. */
@@ -173,7 +178,7 @@ export default function (pi: any) {
     clearInterval(watchTimer);
     watchTimer = undefined;
     if (savedTools) {
-      ctx?.setActiveTools?.(savedTools); // supervising took the writers away, give them back
+      pi.setActiveTools(savedTools); // supervising took the writers away, give them back
       savedTools = undefined;
     }
     state = { ...EMPTY_STATE };
@@ -379,7 +384,11 @@ export default function (pi: any) {
       }
 
       const me = await resolveOwnId();
-      const others = (await channel.listSessions()).filter((s: any) => s.id !== me);
+      // pi-subagents registers every child run with the broker, under an id starting "subagent".
+      // Three of those in one directory made /supervise refuse to pick the one real worker.
+      // Steering a subagent is meaningless anyway: it dies when its task ends.
+      const others = (await channel.listSessions())
+        .filter((s: any) => s.id !== me && !s.id.startsWith("subagent"));
       const [first, ...rest] = text.split(/\s+/);
       const named = others.filter((s: any) => s.id === first || s.name === first);
 
@@ -419,7 +428,7 @@ export default function (pi: any) {
         reset(`intercom-supervisor: ${target} never acknowledged. It probably does not load this extension.`);
       }, PAIR_ACK_TIMEOUT_MS);
 
-      const kept = stripWriters(context);
+      const kept = stripWriters();
 
       const { prompt, source } = loadSupervisorPrompt(context.cwd);
       pi.sendUserMessage(BRIEF(prompt, goal, target));
