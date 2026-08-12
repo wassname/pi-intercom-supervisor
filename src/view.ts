@@ -257,8 +257,12 @@ export function buildView({ goal, status, entries, since = 0, stale = 0, subagen
     // onto whatever the worker is doing now. Verbatim: a goal cut at 300 characters ended
     // mid-word, and a supervisor cannot judge against half a sentence. The byte cut below trims
     // the transcript instead, which is the part that repeats.
-    `# Goal`,
+    //
+    // Tagged, because a real goal runs to several lines and holds its own headings and quotes, so
+    // without a closing mark the reader cannot see where the human stopped typing.
+    `<goal>`,
     goal || "not set",
+    `</goal>`,
     ``,
     `# Worker`,
     ...(model ? [`model: ${model}`] : []),

@@ -250,7 +250,7 @@ test("buildView reports the goal, the counts, and the problems", () => {
     status: "idle",
     entries: [assistant("done", [{ name: "write", args: { path: "results.md" } }]), toolResult("bash", "exit code 2")],
   });
-  assert.match(view, /# Goal\nmake the table/);
+  assert.match(view, /<goal>\nmake the table\n<\/goal>/);
   assert.match(view, /status: idle/);
   assert.match(view, /turns: 2/);
   assert.match(view, /results\.md/);

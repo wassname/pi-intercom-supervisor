@@ -234,13 +234,13 @@ test("a goal the supervisor inferred reaches the worker, which owns the view hea
   worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "" });
   await new Promise((r) => setTimeout(r, 5));
   await worker.settle();
-  assert.match(worker.published.find((p) => p.t === "view").view, /^# Goal\nnot set$/m, "no goal yet");
+  assert.match(worker.published.find((p) => p.t === "view").view, /^<goal>\nnot set\n<\/goal>$/m, "no goal yet");
 
   worker.deliver(SUPER_ID, { t: "goal", to: WORKER_ID, goal: "make the results table" });
   await new Promise((r) => setTimeout(r, 5));
   await worker.settle();
   const views = worker.published.filter((p) => p.t === "view");
-  assert.match(views[views.length - 1].view, /^# Goal\nmake the results table$/m, "the header must follow set_goal");
+  assert.match(views[views.length - 1].view, /^<goal>\nmake the results table\n<\/goal>$/m, "the header must follow set_goal");
 });
 
 test("the second view carries only what happened after the first", async () => {
@@ -282,7 +282,7 @@ test("on settle the worker publishes a view built from the live branch", async (
   const view = worker.published.find((p) => p.t === "view");
   assert.ok(view, "expected a view publish");
   assert.equal(view.to, SUPER_ID);
-  assert.match(view.view, /# Goal\nthe goal/);
+  assert.match(view.view, /<goal>\nthe goal\n<\/goal>/);
   assert.match(view.view, /do the thing/);
 });
 
@@ -501,7 +501,7 @@ test("a resume onto a live worker keeps supervising, and takes the writers back 
   // Without it, fixing the wording needs a fresh pairing, which loses the count of steers.
   const anchor = resumed.userMessages.at(-1)!.content;
   assert.match(anchor, /Supervising again/);
-  assert.match(anchor, /Goal: g/);
+  assert.match(anchor, /<goal>\ng\n<\/goal>/);
   assert.match(anchor, /3 instructions so far/);
   assert.match(anchor, /one tool call: steer, done or let_it_run/);
   // The strip lives in the /supervise handler, which a resume never runs. Without this the

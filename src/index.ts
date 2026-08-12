@@ -614,7 +614,13 @@ export default function (pi: any) {
       return {
         content: [{
           type: "text",
-          text: `Goal set to: ${params.goal}\nThis is a goal you inferred, not one the human gave you.
+          text: `Goal set to:
+
+<goal>
+${params.goal}
+</goal>
+
+This is a goal you inferred, not one the human gave you.
 Tell them in your reply, quoting it, so they can correct it.`,
         }],
       };

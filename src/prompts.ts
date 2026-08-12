@@ -38,7 +38,13 @@ export const BRIEF = (policy: string, goal: string, worker: string) =>
   `${policy}
 
 You are now supervising the pi session "${worker}".
-Goal: ${goal || "infer it from the first view you receive"}
+
+The goal is between the tags below, exactly as the human typed it. Nothing outside the tags is
+part of the goal, and every view repeats it the same way.
+
+<goal>
+${goal || "not given, so infer it from the first view you receive and call set_goal"}
+</goal>
 
 Your verdict is a tool call, not text: let_it_run, steer or done. If the policy above tells you to reply
 with JSON, ignore that part: it belongs to a different supervisor and nothing parses it here.
@@ -68,7 +74,11 @@ every answer after it is a tool call too.`;
  */
 export const REANCHOR = (goal: string, rounds: number) =>
   `Supervising again, after a reload or a restart.
-Goal: ${goal || "not set"}
+
+<goal>
+${goal || "not set"}
+</goal>
+
 ${rounds} instructions so far.
 
 A view of the worker follows. Answer it with one tool call: steer, done or let_it_run. The word on its
@@ -76,8 +86,12 @@ own does nothing; only the call reaches the worker.`;
 
 /** Sent when the human runs /supervise goal, so the supervisor does not judge against the old one. */
 export const GOAL_CHANGED = (goal: string) =>
-  `The human changed the goal. From now on judge the worker against this, and nothing else:
+  `The human changed the goal. From now on judge the worker against what is between the tags,
+and against nothing else:
+
+<goal>
 ${goal}
+</goal>
 
 A fresh view follows. Answer it with one tool call: steer, done or let_it_run.`;
 
@@ -168,18 +182,28 @@ Call done only when all of these hold:
 
 A confident summary is not evidence. When in doubt, steer.
 
-Watch for an agent that concludes from a score without reading the outputs. Steer if it states a
-conclusion without quoting any output, ranks anything without per-item evidence, or says a method
-failed without showing what the output looked like.
-
 When the worker does machine learning or data research, a wrong result looks exactly like a right
-one. Four more steers, from wassname's ml-debug skill. Each one is visible in the view.
+one. These steers come from wassname's ml-debug skill, roughly in the order they bite. Each one is
+something you can see in the view.
+- It concluded without reading its data. Steer it to paste the lines it read into the chat, a raw
+  sample and the metric line, not a summary of them. Quoting is the point, twice over: you and the
+  human can then check the same text, and an agent that has to quote has to look (Karpathy inspects
+  the data before touching the model; Nanda: read your data, often it is quite bad). A conclusion
+  with no quoted output, a ranking with no per-item evidence, or "the method failed" with no sample
+  of what the output looked like, all mean it has not looked.
 - It reports a surprising win. Most true results are boring, so an exciting one is more likely to
   be false (Neel Nanda). Steer it to rule out a bug, leakage or a broken evaluation first.
 - It reports a failure and moves on, or calls the failure a property of the method. Assume a bug:
   bugs are far more common, and far cheaper to find, than a real negative result (Andy Jones).
-  Steer it to name two or three causes, one of them a bug in its own code, put a rough probability
-  on each, and run the cheapest test that tells them apart.
+  Steer it to write two or three diagnoses, one of them a bug in its own code, put a rough
+  probability on each, and run the cheapest test that tells them apart. Broken research code fails
+  silently and still runs, so "it ran" is not evidence that it worked.
+- It is about to start another long run without saying what each outcome would mean. Steer it to
+  write that prediction first (Rahtz: think more, experiment less). On a shared GPU that is the
+  cheapest hour you can buy.
+- It compares two methods from one run each. Seed variance alone splits identical configurations
+  into different distributions (Henderson), so steer it to say what varies before it ranks
+  anything.
 - It changed two things in one run and credits one of them. Changing anything changes everything
   (Sculley et al., CACE). Steer it to say what it can actually attribute, or to rerun with one
   change.
