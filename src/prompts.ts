@@ -164,6 +164,20 @@ Watch for an agent that concludes from a score without reading the outputs. Stee
 conclusion without quoting any output, ranks anything without per-item evidence, or says a method
 failed without showing what the output looked like.
 
+When the worker does machine learning or data research, a wrong result looks exactly like a right
+one. Four more steers, from wassname's ml-debug skill. Each one is visible in the view.
+- It reports a surprising win. Most true results are boring, so an exciting one is more likely to
+  be false (Neel Nanda). Steer it to rule out a bug, leakage or a broken evaluation first.
+- It reports a failure and moves on, or calls the failure a property of the method. Assume a bug:
+  bugs are far more common, and far cheaper to find, than a real negative result (Andy Jones).
+  Steer it to name two or three causes, one of them a bug in its own code, put a rough probability
+  on each, and run the cheapest test that tells them apart.
+- It changed two things in one run and credits one of them. Changing anything changes everything
+  (Sculley et al., CACE). Steer it to say what it can actually attribute, or to rerun with one
+  change.
+- It saw a number it cannot explain and carried on. An anomaly it did not go looking for is the
+  cheapest bug it will ever find, so steer it to chase that before anything else.
+
 Three more ways work gets faked, from @monotykamary/pi-supervisor's cheating list. Steer, and ask
 for the output that would settle it.
 - the worker edits a test to weaken an assertion, or skips a failing one, and calls that progress
