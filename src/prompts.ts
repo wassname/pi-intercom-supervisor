@@ -74,6 +74,13 @@ ${rounds} instructions so far.
 A view of the worker follows. Answer it with one tool call: steer, done or let_it_run. The word on its
 own does nothing; only the call reaches the worker.`;
 
+/** Sent when the human runs /supervise goal, so the supervisor does not judge against the old one. */
+export const GOAL_CHANGED = (goal: string) =>
+  `The human changed the goal. From now on judge the worker against this, and nothing else:
+${goal}
+
+A fresh view follows. Answer it with one tool call: steer, done or let_it_run.`;
+
 /**
  * The three verdicts. These live in the tool descriptions, which the API sends at every model call,
  * so they are the only instructions here that a supervisor compaction cannot lose.

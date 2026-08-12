@@ -36,6 +36,7 @@ import {
 import {
   BRIEF,
   DONE_BLOCKED,
+  GOAL_CHANGED,
   NO_GOAL,
   REANCHOR,
   REVIEW_NUDGE,
@@ -457,7 +458,7 @@ export default function (pi: any) {
   // ---- supervisor side: one command and three tools ---------------------------------------
 
   pi.registerCommand("supervise", {
-    description: "Supervise the other pi session here: /supervise [goal], /supervise <name|id> [goal], /supervise look, /supervise stop",
+    description: "Supervise the other pi session here: /supervise [goal], /supervise @name [goal], /supervise goal <new goal>, /supervise look, /supervise stop",
     handler: async (args: string, context: any) => {
       ctx = context;
       const text = args.trim();
@@ -479,6 +480,28 @@ export default function (pi: any) {
         context.ui?.notify?.(`asked ${state.pairedId.slice(0, 8)} for a view`, "info");
         return;
       }
+      // Change the goal without breaking the pairing. Stopping and pairing again is the only other
+      // way, and that throws away the supervisor's memory of its own steers.
+      if (text === "goal" || text.startsWith("goal ")) {
+        const goal = text.slice(4).trim();
+        if (state.role !== "supervisor") {
+          context.ui?.notify?.("intercom-supervisor: not supervising, so there is no goal to change", "error");
+          return;
+        }
+        if (!goal) {
+          context.ui?.notify?.(`intercom-supervisor: the goal now is: ${state.goal || "not set"}`, "info");
+          return;
+        }
+        state = { ...state, goal };
+        save();
+        send({ t: "goal", to: state.pairedId, goal }); // the worker heads every view with it
+        // Tell the supervisor now, and ask for a view, so it judges the new goal at once instead of
+        // waiting up to half an hour for the next look.
+        pi.sendUserMessage(GOAL_CHANGED(goal), ctx?.isIdle() ? undefined : { deliverAs: "followUp" });
+        send({ t: "look", to: state.pairedId });
+        context.ui?.notify?.(`goal changed: ${goal}`, "info");
+        return;
+      }
       if (state.role !== "none") {
         context.ui?.notify?.(
           `intercom-supervisor: already paired with ${state.pairedId.slice(0, 8)} as ${state.role}. Run /supervise stop first.`,
@@ -493,22 +516,36 @@ export default function (pi: any) {
       // Steering a subagent is meaningless anyway: it dies when its task ends.
       const others = (await channel.listSessions())
         .filter((s: any) => s.id !== me && !s.id.startsWith("subagent"));
+      // The id prefix is the start of the "pi --session <id>" line pi prints in every terminal at
+      // startup, so it is something you can match against a window.
+      const seen = others.map((s: any) => `${s.name ?? "(unnamed)"} ${s.id.slice(0, 8)} in ${s.cwd}`).join(", ");
       const [first, ...rest] = text.split(/\s+/);
-      const named = others.filter((s: any) => s.id === first || s.name === first);
 
-      // Naming a worker is optional. With one other session in this directory, that is the worker,
-      // and everything you typed is the goal. Only a first word that matches a session is a target.
-      let worker = named[0];
-      let goal = rest.join(" ");
-      if (named.length !== 1) {
+      // A target is written @name, so nothing has to be guessed from a goal that has spaces in it.
+      // Before this, a first word that matched no session was silently swallowed into the goal:
+      // "/supervise LUCID do the thing" set the goal to "LUCID do the thing" and said nothing.
+      let worker: any;
+      let goal: string;
+      if (first.startsWith("@")) {
+        const want = first.slice(1);
+        const match = others.filter((s: any) => s.name === want || s.id === want || s.id.startsWith(want));
+        if (match.length !== 1) {
+          context.ui?.notify?.(
+            `intercom-supervisor: ${match.length} sessions match @${want}. Seen: ${seen || "none"}`,
+            "error",
+          );
+          return;
+        }
+        worker = match[0];
+        goal = rest.join(" ");
+      } else {
+        // No target named, so the only other session in this directory is the worker and the whole
+        // line is the goal.
         const here = others.filter((s: any) => s.cwd === context.cwd);
         if (here.length !== 1) {
-          // The id prefix is the start of the "pi --session <id>" line pi prints in every terminal
-          // at startup, so it is something you can actually match against a window.
-          const seen = others.map((s: any) => `${s.name ?? "(unnamed)"} ${s.id.slice(0, 8)} in ${s.cwd}`).join(", ");
           context.ui?.notify?.(
             `intercom-supervisor: ${here.length} other sessions in ${context.cwd}, so say which. `
-            + `Run /name <something> in the worker, then /supervise <something> <goal>, or use the id below. `
+            + `Run /name <something> in the worker, then /supervise @<something> <goal>, or use @<id>. `
             + `Seen: ${seen || "none"}`,
             "error",
           );

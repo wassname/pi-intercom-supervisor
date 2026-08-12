@@ -211,7 +211,7 @@ test("only the paired worker can end a run", async () => {
   // reach a supervisor which has itself moved on, or a live run ends and nobody asked for it.
   const sup = harness(SUPER_ID);
   await sup.start();
-  await sup.run("supervise", "worker g");
+  await sup.run("supervise", "@worker g");
   sup.deliver("session-a-worker-we-left", { t: "unpair", to: SUPER_ID });
   sup.deliver("session-a-worker-we-left", { t: "done", to: SUPER_ID, reason: "I decided we are finished" });
   await new Promise((r) => setTimeout(r, 5));
@@ -315,7 +315,7 @@ test("supervision never stops itself: no round limit at all", async () => {
   // failure this extension exists to prevent, so a cap would be a competing objective.
   const sup = harness(SUPER_ID);
   await sup.start();
-  await sup.run("supervise", "worker do the thing");
+  await sup.run("supervise", "@worker do the thing");
 
   const steer = sup.tools.get("steer")!;
   for (let i = 0; i < 200; i++) {
@@ -327,7 +327,7 @@ test("supervision never stops itself: no round limit at all", async () => {
 test("goal, pairing and the steer count all survive a reload together", async () => {
   const first = harness(SUPER_ID);
   await first.start();
-  await first.run("supervise", "worker make the results table");
+  await first.run("supervise", "@worker make the results table");
   const steer = first.tools.get("steer")!;
   for (let i = 0; i < 3; i++) {
     await steer.execute("id", { message: `instruction ${i}` }, undefined, undefined, first.ctx);
@@ -349,7 +349,7 @@ test("a view that arrives while the supervisor is thinking is queued, not droppe
   // silently skip a whole look.
   const sup = harness(SUPER_ID, { isIdle: false });
   await sup.start();
-  await sup.run("supervise", "worker g");
+  await sup.run("supervise", "@worker g");
   sup.userMessages.length = 0;
   sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal: g\n", stopped: true });
   await new Promise((r) => setTimeout(r, 5));
@@ -363,7 +363,7 @@ test("the nudge repeats neither the instructions already sent nor the verdict ru
   // and the verdict rules are in the tool descriptions, which the API sends at every model call.
   const sup = harness(SUPER_ID);
   await sup.start();
-  await sup.run("supervise", "worker fix the tests");
+  await sup.run("supervise", "@worker fix the tests");
   const steer = sup.tools.get("steer")!;
   for (let i = 0; i < STEER_MEMORY + 3; i++) {
     await steer.execute("id", { message: `instruction ${i}` }, undefined, undefined, sup.ctx);
@@ -383,7 +383,7 @@ test("a check in and a worker that stopped ask for different things", async () =
   // Interrupting a working agent costs it its train of thought, so a check in leans on wait.
   const sup = harness(SUPER_ID);
   await sup.start();
-  await sup.run("supervise", "worker fix the tests");
+  await sup.run("supervise", "@worker fix the tests");
 
   sup.userMessages.length = 0;
   sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal: g\n", stopped: false });
@@ -400,7 +400,7 @@ test("a loop still gets named after the supervisor compacts, from restored state
   // repeat once a compaction has taken the supervisor's own steer calls out of its context.
   const first = harness(SUPER_ID);
   await first.start();
-  await first.run("supervise", "worker fix the tests");
+  await first.run("supervise", "@worker fix the tests");
   await first.tools.get("steer")!
     .execute("id", { message: "Run the failing parser tests and fix the first failure" }, undefined, undefined, first.ctx);
 
@@ -441,7 +441,7 @@ test("/supervise look asks the worker for a fresh view, rather than the supervis
   // it work from stale context and invent facts.
   const sup = harness(SUPER_ID);
   await sup.start();
-  await sup.run("supervise", "worker make the results table");
+  await sup.run("supervise", "@worker make the results table");
   await sup.run("supervise", "look");
   assert.deepEqual(sup.published.filter((p) => p.t === "look"), [{ t: "look", to: WORKER_ID }]);
 
@@ -465,7 +465,7 @@ test("let_it_run says the turn is over, so it is not called four times running",
   // reads as a prompt to act again, so the result has to say the turn is finished.
   const sup = harness(SUPER_ID);
   await sup.start();
-  await sup.run("supervise", "worker make the results table");
+  await sup.run("supervise", "@worker make the results table");
 
   const result = await sup.tools.get("let_it_run")!.execute("id", { reason: "job 291 is at 305 of 600" }, undefined, undefined, sup.ctx);
   assert.match(result.content[0].text, /job 291 is at 305 of 600/, "the reason is still recorded");
@@ -483,7 +483,7 @@ test("a resume onto a session that is gone drops the pairing and says so", async
 
   assert.ok(resumed.notices.some((n) => /ghost-se is gone.*Run \/supervise/.test(n)), resumed.notices.join(" | "));
   // And the refusal is gone with it, so /supervise works straight away.
-  await resumed.run("supervise", "worker do the thing");
+  await resumed.run("supervise", "@worker do the thing");
   assert.ok(!resumed.notices.some((n) => /already paired/.test(n)), resumed.notices.join(" | "));
 });
 
@@ -542,7 +542,7 @@ test("with no goal the supervisor cannot steer, it must ask the human", async ()
   // Seen in a real run: started with no goal, the supervisor invented a task for the worker.
   const sup = harness(SUPER_ID);
   await sup.start();
-  await sup.run("supervise", "worker"); // no goal given
+  await sup.run("supervise", "@worker"); // a target and no goal
 
   const result = await sup.tools.get("steer")!.execute("id", { message: "do something" }, undefined, undefined, sup.ctx);
   assert.ok(result.isError, "steering with no goal must be refused");
@@ -577,7 +577,7 @@ test("set_goal binds an inferred goal, and steering then works", async () => {
 test("a goal given at pair time still allows steering", async () => {
   const sup = harness(SUPER_ID);
   await sup.start();
-  await sup.run("supervise", "worker make the results table");
+  await sup.run("supervise", "@worker make the results table");
 
   const result = await sup.tools.get("steer")!.execute("id", { message: "read the log" }, undefined, undefined, sup.ctx);
   assert.ok(!result.isError, `expected a steer to be allowed, got ${result.content[0].text}`);
@@ -587,7 +587,7 @@ test("done is refused while the worker has an unanswered tool call", async () =>
   // A settled worker whose subagent call has no result is still spending. "done" would be a lie.
   const sup = harness(SUPER_ID);
   await sup.start();
-  await sup.run("supervise", "worker finish the sweep");
+  await sup.run("supervise", "@worker finish the sweep");
   // Built by buildView, not hand written, so the guard cannot drift away from the view wording.
   const view = buildView({
     goal: "finish the sweep",
@@ -613,7 +613,7 @@ test("done is refused while the worker has an unanswered tool call", async () =>
 test("done is allowed once nothing is outstanding", async () => {
   const sup = harness(SUPER_ID);
   await sup.start();
-  await sup.run("supervise", "worker finish the sweep");
+  await sup.run("supervise", "@worker finish the sweep");
   const view = buildView({ goal: "finish the sweep", status: "idle", entries: [message("assistant", "all done")] });
   sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view, stopped: true });
   await new Promise((r) => setTimeout(r, 5));
@@ -633,7 +633,7 @@ test("a reworded repeat of an earlier instruction is sent, and named back to the
   // Six remembered instructions do not stop a loop by themselves: rephrasing reads as new work.
   const sup = harness(SUPER_ID);
   await sup.start();
-  await sup.run("supervise", "worker g");
+  await sup.run("supervise", "@worker g");
   const steer = sup.tools.get("steer")!;
   await steer.execute("id", { message: "Run the failing parser tests and fix the first failure" }, undefined, undefined, sup.ctx);
   const again = await steer.execute(
@@ -662,11 +662,11 @@ test("overlap scores rewording high and a different instruction low", () => {
 test("the view of the old worker cannot be used to judge the new one", async () => {
   const sup = harness(SUPER_ID);
   await sup.start();
-  await sup.run("supervise", "worker g");
+  await sup.run("supervise", "@worker g");
   sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal: old worker\n", stopped: true });
   await new Promise((r) => setTimeout(r, 5));
   await sup.run("supervise", "stop");
-  await sup.run("supervise", "worker g2");
+  await sup.run("supervise", "@worker g2");
 
   const seen = await sup.tools.get("worker_view")!.execute("id", {}, undefined, undefined, sup.ctx);
   assert.doesNotMatch(seen.content[0].text, /old worker/);
@@ -685,7 +685,7 @@ test("with one other session here, /supervise needs no target and the whole line
 test("naming the worker still works, and the rest of the line is the goal", async () => {
   const sup = harness(SUPER_ID);
   await sup.start();
-  await sup.run("supervise", "worker make the results table");
+  await sup.run("supervise", "@worker make the results table");
   assert.deepEqual(sup.published.find((p) => p.t === "pair"), {
     t: "pair",
     to: WORKER_ID,
@@ -737,6 +737,50 @@ test("stopping gives back the writers without undoing another extension's tools"
   const after = sup.pi.getActiveTools();
   assert.ok(after.includes("context_prune"), "the other extension's tool is still there");
   assert.ok(after.includes("bash") && after.includes("edit") && after.includes("write"), "and the writers are back");
+});
+
+test("a first word that names no session is refused, rather than folded into the goal", async () => {
+  // wassname typed "/supervise LUCID <goal>" when the session was named LUCID_worker. The old code
+  // matched nothing, fell back to the only session here, and set the goal to "LUCID <goal>".
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "@LUCID make the results table");
+
+  assert.deepEqual(sup.published, [], "no pairing on a target that matches nothing");
+  assert.match(sup.notices.join("\n"), /0 sessions match @LUCID/);
+});
+
+test("a goal with spaces needs no target, and @name takes the rest of the line as the goal", async () => {
+  const plain = harness(SUPER_ID);
+  await plain.start();
+  await plain.run("supervise", "make the results table and quote it");
+  assert.equal(plain.published.find((p) => p.t === "pair").goal, "make the results table and quote it");
+
+  const named = harness(SUPER_ID);
+  await named.start();
+  await named.run("supervise", "@worker make the results table and quote it");
+  assert.deepEqual(named.published.find((p) => p.t === "pair"), {
+    t: "pair",
+    to: WORKER_ID,
+    goal: "make the results table and quote it",
+  });
+});
+
+test("/supervise goal changes the goal without breaking the pairing", async () => {
+  // The only other way is /supervise stop and a fresh pairing, which throws away the steer count.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "@worker make the table");
+  await sup.tools.get("steer")!.execute("id", { message: "run the suite" }, undefined, undefined, sup.ctx);
+
+  await sup.run("supervise", "goal quote the evidence file instead");
+
+  assert.deepEqual(sup.published.filter((p) => p.t === "goal"), [
+    { t: "goal", to: WORKER_ID, goal: "quote the evidence file instead" },
+  ], "the worker holds the copy every view header is built from");
+  assert.ok(sup.published.some((p) => p.t === "look"), "and a fresh view follows, so it judges now");
+  assert.match(sup.userMessages.at(-1)!.content, /changed the goal[\s\S]*quote the evidence file instead/);
+  assert.match(sup.status.get("intercom-supervisor")!, /watching 1/, "the steer count survives");
 });
 
 test("the footer says which side of a pairing this session is, and clears when it ends", async () => {
@@ -811,9 +855,9 @@ test("the view names the worker's model and how full its context is", async () =
 test("supervising a second session is refused while the first is still paired", async () => {
   const sup = harness(SUPER_ID);
   await sup.start();
-  await sup.run("supervise", "worker g");
+  await sup.run("supervise", "@worker g");
   const before = sup.published.length;
-  await sup.run("supervise", "worker other goal");
+  await sup.run("supervise", "@worker other goal");
 
   assert.equal(sup.published.length, before, "no second pair goes out");
   assert.match(sup.notices.join("\n"), /already paired/);

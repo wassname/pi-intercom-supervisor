@@ -27,8 +27,14 @@ you can see which one was picked.
 
 `/supervise` takes the only other session in this directory, so the whole line is the goal. With
 more than one it refuses and lists them, since guessing is worse than asking. Run `/name worker`
-in the one you want and then `/supervise worker make the table`, or use the id it printed, which
-is the start of the `pi --session <id>` line in that terminal. `/supervise stop` ends it.
+in the one you want and then `/supervise @worker make the table`, or use `@` and the id it printed,
+which is the start of the `pi --session <id>` line in that terminal. The `@` is what keeps a goal
+with spaces in it out of the target: a first word that names no session is refused, where it used
+to be folded into the goal without a word. `/supervise stop` ends it.
+
+`/supervise goal <new goal>` changes the goal in place. The worker hears it, a fresh view follows,
+and the supervisor keeps its memory of the steers it has already sent, which stopping and pairing
+again would throw away.
 
 A supervisor that comes back from a crash, a credit failure or a `/reload` says the goal and the
 answer shape again, then asks the worker for a view, so restarting the session is the whole
@@ -169,7 +175,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 72 tests, free apart from a ps call
+npm test                      # 75 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```
