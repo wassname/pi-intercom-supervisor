@@ -6,11 +6,11 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/wassname/pi-supervise.git"
+    "url": "https://github.com/wassname/pi-intercom-supervisor.git"
   },
-  "homepage": "https://github.com/wassname/pi-supervise#readme",
+  "homepage": "https://github.com/wassname/pi-intercom-supervisor#readme",
   "bugs": {
-    "url": "https://github.com/wassname/pi-supervise/issues"
+    "url": "https://github.com/wassname/pi-intercom-supervisor/issues"
   },
   "keywords": [
     "pi-package",
@@ -23,7 +23,7 @@
   ],
   "pi": {
     "extensions": ["./src/index.ts"],
-    "image": "https://cdn.jsdelivr.net/gh/wassname/pi-supervise@main/media/screenshot.png"
+    "image": "https://cdn.jsdelivr.net/gh/wassname/pi-intercom-supervisor@main/media/screenshot.png"
   },
   "scripts": {
     "pretest": "tsx scripts/make-fixture.ts",
