@@ -397,6 +397,33 @@ test("a loop still gets named after the supervisor compacts, from restored state
   assert.match(again.content[0].text, /says much the same as instruction 1/);
 });
 
+test("a resume onto a session that is gone drops the pairing and says so", async () => {
+  // What wassname hit: resume a supervisor, it sits idle still claiming a pairing, prints nothing,
+  // and refuses /supervise until you work out it wants /supervise stop. pairedId addresses a live
+  // process, so restoring it out of a transcript is restoring an address, not a fact.
+  const carried = [{ type: "custom", customType: STATE_ENTRY, data: { role: "supervisor", pairedId: "ghost-session", goal: "g", steerRounds: 3 } }];
+  const resumed = harness(SUPER_ID, { entries: carried });
+  await resumed.start();
+  await new Promise((r) => setTimeout(r, 5));
+
+  assert.ok(resumed.notices.some((n) => /ghost-se is gone.*Run \/supervise/.test(n)), resumed.notices.join(" | "));
+  // And the refusal is gone with it, so /supervise works straight away.
+  await resumed.run("supervise", "worker do the thing");
+  assert.ok(!resumed.notices.some((n) => /already paired/.test(n)), resumed.notices.join(" | "));
+});
+
+test("a resume onto a live worker keeps supervising, and takes the writers back off", async () => {
+  const carried = [{ type: "custom", customType: STATE_ENTRY, data: { role: "supervisor", pairedId: WORKER_ID, goal: "g", steerRounds: 3 } }];
+  const resumed = harness(SUPER_ID, { entries: carried });
+  await resumed.start();
+  await new Promise((r) => setTimeout(r, 5));
+
+  assert.ok(resumed.notices.some((n) => /still supervisor with/.test(n)), resumed.notices.join(" | "));
+  // The strip lives in the /supervise handler, which a resume never runs. Without this the
+  // supervisor comes back with bash and edit in a directory the worker is writing to.
+  assert.deepEqual(resumed.ctx.getActiveTools(), ["read", "grep", "list"]);
+});
+
 test("state written before recentSteers existed still loads", () => {
   const old = [{ type: "custom", customType: STATE_ENTRY, data: { role: "supervisor", pairedId: "w", goal: "g", steerRounds: 4 } }];
   const restored = restoreState(old);

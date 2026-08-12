@@ -118,6 +118,53 @@ export default function (pi: any) {
     return ownId;
   }
 
+  /**
+   * Take the writing tools off this session. Supervising is a read-only job in a directory
+   * another agent is writing to. reset() hands them back.
+   *
+   * Observed 2026-08-12: a supervisor made 36 bash calls in the same session that ran /supervise,
+   * 65 seconds after the brief, with no resume in between (session 019ff458-4578). So the strip
+   * did nothing and said nothing. It used to skip quietly when the list came back the same size,
+   * which hides both an empty getActiveTools and a tool named something this list misses. Now the
+   * kept list is always printed and the deny list is checked against what was really there.
+   */
+  function stripWriters(context: any): string[] {
+    const before: string[] = context.getActiveTools();
+    const kept = before.filter((t: string) => !WRITER_TOOLS.has(t.toLowerCase()));
+    savedTools = before;
+    context.setActiveTools(kept);
+    const still = context.getActiveTools().filter((t: string) => WRITER_TOOLS.has(t.toLowerCase()));
+    if (still.length) throw new Error(`intercom-supervisor: setActiveTools did not remove ${still.join(", ")}`);
+    return kept;
+  }
+
+  /**
+   * What a restored pairing means on the wire, checked once the channel exists.
+   *
+   * restoreState reads the transcript, which is right for the goal and the round count and wrong
+   * for pairedId: that addresses a live process, and after a resume or a /reload the process on
+   * the other end may be gone. A resumed session then sits idle claiming a pairing, says nothing
+   * on screen, and refuses /supervise until you work out it needs /supervise stop.
+   *
+   * The broker's registry is the truth about who exists now, so ask it. Either way this prints,
+   * because "supervising, waiting" and "the other session is gone" look identical otherwise.
+   */
+  async function rejoinOrDrop() {
+    if (!state.role || !state.pairedId) return;
+    const live = await channel!.listSessions();
+    if (!live.some((s: any) => s.id === state.pairedId)) {
+      reset(`intercom-supervisor: ${state.pairedId.slice(0, 8)} is gone, so the pairing is dropped. Run /supervise to start again.`);
+      return;
+    }
+    // The strip lives in the /supervise handler and savedTools is memory, so a resumed supervisor
+    // has bash and the edit tools back in a directory the worker is writing to.
+    if (state.role === "supervisor") stripWriters(ctx);
+    ctx?.ui?.notify?.(
+      `intercom-supervisor: still ${state.role} with ${state.pairedId.slice(0, 8)}, waiting for the next view`,
+      "info",
+    );
+  }
+
   /** Everything that ends a pairing goes through here, so no stale view or timer survives it. */
   function reset(note: string) {
     clearTimeout(pairTimer);
@@ -214,6 +261,7 @@ export default function (pi: any) {
       ownerEligible: false,
       onReady: (value: IntercomExtensionChannel) => {
         channel = value;
+        rejoinOrDrop().catch((err: Error) => debug("rejoin failed", { error: err.message }));
       },
       onEvent: (event: IntercomExtensionEvent) => {
         if (event.type === "message" && isWire(event.payload)) {
@@ -349,18 +397,11 @@ export default function (pi: any) {
         reset(`intercom-supervisor: ${target} never acknowledged. It probably does not load this extension.`);
       }, PAIR_ACK_TIMEOUT_MS);
 
-      // Supervising is a read-only job in a directory another agent is writing to. Taken back in
-      // reset(), so /supervise stop, done and unpair all restore what you had.
-      const before: string[] = context.getActiveTools?.() ?? [];
-      const kept = before.filter((t: string) => !WRITER_TOOLS.has(t.toLowerCase()));
-      if (kept.length < before.length) {
-        savedTools = before;
-        context.setActiveTools(kept);
-      }
+      const kept = stripWriters(context);
 
       const { prompt, source } = loadSupervisorPrompt(context.cwd);
       pi.sendUserMessage(BRIEF(prompt, goal, target));
-      context.ui?.notify?.(`supervising ${target} (policy: ${source}, tools: ${kept.join(", ") || "unchanged"})`, "info");
+      context.ui?.notify?.(`supervising ${target} (policy: ${source}, tools: ${kept.join(", ")})`, "info");
     },
   });
 
