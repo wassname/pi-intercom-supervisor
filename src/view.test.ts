@@ -34,31 +34,25 @@ test("a view carries only the turns the supervisor has not been sent", () => {
   assert.match(next, /# New turns since your last look \(1 of 3\)/);
 });
 
-test("the view carries the worker's latest reasoning, which pi-vcc drops", () => {
-  // Block shape read out of a real session jsonl, where an assistant entry held 2 thinking
-  // blocks. pi-vcc's normalize keeps only text and toolCall, so a stuck worker saying so in
-  // its reasoning reaches nobody. That is the earliest sign of a loop we can see.
-  const thinker = (thinking: string): Entry => ({
+test("the last two reasoning blocks stay in the narrative, and older ones drop out", () => {
+  // Block shape read out of a real session jsonl. pi-vcc's normalize keeps only text and toolCall,
+  // so reasoning reaches nobody, although you see it on screen. It belongs beside the tool call it
+  // produced, not in a section of its own, because that is the order you read a session in.
+  const thinker = (thinking: string, said: string): Entry => ({
     type: "message",
-    message: { role: "assistant", content: [{ type: "thinking", thinking }, { type: "text", text: "ok" }] },
+    message: { role: "assistant", content: [{ type: "thinking", thinking }, { type: "text", text: said }] },
   });
-  // Three blocks, not one: a worker repeating itself is the thing worth seeing, and one block
-  // shows only the newest try. Not all of them, or the view becomes a second transcript.
   const entries = [
-    thinker("TOO OLD TO SEND"),
-    thinker("testing whether the tool output comes through, try ONE"),
-    thinker("testing whether the tool output comes through, try TWO"),
-    thinker("testing whether the tool output comes through, try THREE"),
+    thinker("TOO OLD TO SEND", "first try"),
+    thinker("the bash tool is dead, LET ME TEST READ", "second try"),
+    thinker("read works, SO I WILL DELEGATE INSTEAD", "third try"),
   ];
 
   const view = buildView({ goal: "g", status: "working", entries });
-  assert.match(view, /try ONE[\s\S]*try TWO[\s\S]*try THREE/, "oldest first, so a repeat reads as a repeat");
-  assert.doesNotMatch(view, /TOO OLD TO SEND/);
-  assert.match(view, /last 3 reasoning blocks/);
-
-  // Redacted reasoning is empty, and then the section must not appear at all.
-  const redacted = buildView({ goal: "g", status: "working", entries: [thinker("")] });
-  assert.doesNotMatch(redacted, /latest reasoning/);
+  assert.match(view, /LET ME TEST READ[\s\S]*SO I WILL DELEGATE INSTEAD/, "in order, oldest first");
+  assert.match(view, /LET ME TEST READ[\s\S]*second try/, "each thought sits with the turn it produced");
+  assert.doesNotMatch(view, /TOO OLD TO SEND/, "two blocks, or the view becomes a second transcript");
+  assert.match(view, /\(thinking\)/, "marked, so the supervisor knows it is reasoning and not speech");
 });
 
 test("a compaction restarts the view, so no turn falls into the gap", () => {
@@ -256,7 +250,7 @@ test("buildView reports the goal, the counts, and the problems", () => {
     status: "idle",
     entries: [assistant("done", [{ name: "write", args: { path: "results.md" } }]), toolResult("bash", "exit code 2")],
   });
-  assert.match(view, /# Goal: make the table/);
+  assert.match(view, /# Goal\nmake the table/);
   assert.match(view, /status: idle/);
   assert.match(view, /turns: 2/);
   assert.match(view, /results\.md/);

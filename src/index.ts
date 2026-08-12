@@ -227,6 +227,14 @@ export default function (pi: any) {
       return;
     }
 
+    if (wire.t === "look" && state.role === "worker") {
+      // Only the worker can make a view, so a supervisor that lost its place has to ask. It loses
+      // its place whenever its own turn ends without one: a crash, a credit failure, a /reload.
+      // Its answer to a stale context is to invent, so give it real data instead.
+      await publishMidRun(ctx, "you asked");
+      return;
+    }
+
     if (wire.t === "directive" && state.role === "worker") {
       // Busy worker gets "steer": delivered after the current tool calls, before the next LLM call.
       // "followUp" would make it finish the whole task first, so a correction arrives too late to
@@ -340,7 +348,7 @@ export default function (pi: any) {
   // ---- supervisor side: one command and three tools ---------------------------------------
 
   pi.registerCommand("supervise", {
-    description: "Supervise the other pi session here: /supervise [goal], /supervise <name|id> [goal], /supervise stop",
+    description: "Supervise the other pi session here: /supervise [goal], /supervise <name|id> [goal], /supervise look, /supervise stop",
     handler: async (args: string, context: any) => {
       ctx = context;
       const text = args.trim();
@@ -351,6 +359,15 @@ export default function (pi: any) {
       if (text === "stop") {
         if (state.pairedId) send({ t: "unpair", to: state.pairedId });
         reset("supervision stopped");
+        return;
+      }
+      if (text === "look") {
+        if (state.role !== "supervisor") {
+          context.ui?.notify?.("intercom-supervisor: not supervising, so there is nothing to look at", "error");
+          return;
+        }
+        send({ t: "look", to: state.pairedId });
+        context.ui?.notify?.(`asked ${state.pairedId.slice(0, 8)} for a view`, "info");
         return;
       }
       if (state.role !== "none") {

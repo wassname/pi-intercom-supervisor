@@ -146,26 +146,43 @@ export function turnsSince(entries: Entry[]): number {
   return messagesSince(entries).length;
 }
 
-/** How many reasoning blocks the view carries, and how much of each. Three shows a repeat. */
-const THINKING_BLOCKS = 3;
-const THINKING_CHARS = 500;
+/** Reasoning blocks kept, newest first, and the tail kept from each. A block ends on a decision. */
+const THINKING_BLOCKS = 2;
+const THINKING_CHARS = 400;
 
 /**
- * The worker's last few reasoning blocks, oldest first. pi-vcc's normalize keeps only text and
- * toolCall blocks, so without this the supervisor never sees them, though you do on screen.
+ * Keep the last few reasoning blocks by rewriting them as text, and let pi-vcc drop the rest.
  *
- * One block gives the current symptom. Three give a loop: observed 2026-08-12, a worker wrote
- * "Testing whether tool outputs come through now" seventeen times, and one block showed only the
- * newest try. Each is cut to its tail, because a reasoning block ends on what it decided to do.
+ * normalize() keeps only text and toolCall blocks from an assistant message, so reasoning never
+ * reaches the supervisor although you see it on screen. Rewriting in place leaves each thought
+ * next to the tool call it produced, which is the order you read a session in. A separate section
+ * at the top of the view would divorce the thought from what it did.
+ *
+ * Only the last two, because one worker session here held 161 reasoning blocks and all of them
+ * would make the view a second transcript. Everything older needs no work: pi-vcc drops it.
  */
-export function latestThinking(msgs: AgentMsg[]): string[] {
-  const found: string[] = [];
-  for (let i = msgs.length - 1; i >= 0 && found.length < THINKING_BLOCKS; i--) {
-    for (const b of blocks(msgs[i]).filter((b) => b.type === "thinking").reverse()) {
-      if (b.thinking && found.length < THINKING_BLOCKS) found.push(b.thinking.slice(-THINKING_CHARS));
+function keepRecentThinking(msgs: AgentMsg[]): AgentMsg[] {
+  const keep = new Set<string>();
+  outer: for (let i = msgs.length - 1; i >= 0; i--) {
+    const content = msgs[i].content;
+    if (!Array.isArray(content)) continue;
+    for (let j = content.length - 1; j >= 0; j--) {
+      if (content[j].type !== "thinking" || !content[j].thinking) continue;
+      keep.add(`${i}:${j}`);
+      if (keep.size === THINKING_BLOCKS) break outer;
     }
   }
-  return found.reverse();
+  if (!keep.size) return msgs;
+  return msgs.map((msg, i) =>
+    Array.isArray(msg.content)
+      ? {
+        ...msg,
+        content: msg.content.map((b, j) =>
+          keep.has(`${i}:${j}`) ? { type: "text", text: `(thinking) ${b.thinking!.slice(-THINKING_CHARS)}` } : b
+        ),
+      }
+      : msg
+  );
 }
 
 const VCC_SEPARATOR = "\n\n---\n\n";
@@ -186,7 +203,7 @@ function vccSections(fresh: AgentMsg[]): { headers: string; brief: string } {
   //
   // compile appends a note telling the reader to call vcc_recall, which the supervisor does not
   // have. Matched on the tool name because wrapLongLines rewraps the note before we see it.
-  const compiled = compile({ messages: fresh as any })
+  const compiled = compile({ messages: keepRecentThinking(fresh) as any })
     .replace(/\n*-*\n*Use `vcc_recall`[\s\S]*$/, "")
     .trim();
   if (!VCC_HEADERS.some((h) => compiled.startsWith(`[${h}]`))) return { headers: "", brief: compiled };
@@ -226,13 +243,15 @@ export function buildView({ goal, status, entries, since = 0, stale = 0, subagen
   const from = restarted ? 0 : since;
   const fresh = messagesSince(entries).slice(from);
   const { headers, brief } = vccSections(fresh);
-  const thinking = latestThinking(fresh);
   const earlier = compactionSummary(entries);
 
   const head = [
     // Repeated every view on purpose. This is the one reminder that stops the supervisor drifting
-    // onto whatever the worker is doing now, so it is kept short rather than dropped.
-    `# Goal: ${(goal || "not set").replace(/\s+/g, " ").slice(0, 300)}`,
+    // onto whatever the worker is doing now. Verbatim: a goal cut at 300 characters ended
+    // mid-word, and a supervisor cannot judge against half a sentence. The byte cut below trims
+    // the transcript instead, which is the part that repeats.
+    `# Goal`,
+    goal || "not set",
     ``,
     `# Worker`,
     `status: ${status}`,
@@ -244,11 +263,6 @@ export function buildView({ goal, status, entries, since = 0, stale = 0, subagen
     `# Problems`,
     errors.length ? errors.join("\n") : "none",
     ``,
-    // Tail, not head: a reasoning block ends on what it decided to do, which is the part a
-    // steer has to answer. Absent on a provider that redacts reasoning, and that is fine.
-    ...(thinking.length
-      ? [`# The worker's last ${thinking.length} reasoning blocks, oldest first, each cut to its end`, thinking.join("\n--\n"), ``]
-      : []),
     // Sent when this view starts at the compaction boundary, which is the first view and every
     // view after the worker compacts. In between the supervisor already has it.
     ...(from === 0 && earlier

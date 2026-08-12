@@ -17,6 +17,8 @@ export type Wire =
   | { t: "goal"; to: string; goal: string }
   /** stopped: the worker settled, so this is a decision point. false: a check in mid-turn. */
   | { t: "view"; to: string; view: string; stopped: boolean }
+  /** Supervisor asks for a view now. Its own turn cannot make one: the worker publishes them. */
+  | { t: "look"; to: string }
   | { t: "directive"; to: string; text: string }
   | { t: "done"; to: string; reason: string }
   | { t: "unpair"; to: string };
@@ -30,7 +32,7 @@ export function isWire(payload: unknown): payload is Wire {
   if (t === "view") return typeof view === "string" && typeof stopped === "boolean";
   if (t === "directive") return typeof text === "string" && text.trim().length > 0;
   if (t === "done") return typeof reason === "string";
-  return t === "unpair" || t === "paired";
+  return t === "unpair" || t === "paired" || t === "look";
 }
 
 /**

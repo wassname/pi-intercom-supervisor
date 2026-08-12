@@ -216,13 +216,13 @@ test("a goal the supervisor inferred reaches the worker, which owns the view hea
   worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "" });
   await new Promise((r) => setTimeout(r, 5));
   await worker.settle();
-  assert.match(worker.published.find((p) => p.t === "view").view, /^# Goal: not set$/m, "no goal yet");
+  assert.match(worker.published.find((p) => p.t === "view").view, /^# Goal\nnot set$/m, "no goal yet");
 
   worker.deliver(SUPER_ID, { t: "goal", to: WORKER_ID, goal: "make the results table" });
   await new Promise((r) => setTimeout(r, 5));
   await worker.settle();
   const views = worker.published.filter((p) => p.t === "view");
-  assert.match(views[views.length - 1].view, /^# Goal: make the results table$/m, "the header must follow set_goal");
+  assert.match(views[views.length - 1].view, /^# Goal\nmake the results table$/m, "the header must follow set_goal");
 });
 
 test("the second view carries only what happened after the first", async () => {
@@ -264,7 +264,7 @@ test("on settle the worker publishes a view built from the live branch", async (
   const view = worker.published.find((p) => p.t === "view");
   assert.ok(view, "expected a view publish");
   assert.equal(view.to, SUPER_ID);
-  assert.match(view.view, /# Goal: the goal/);
+  assert.match(view.view, /# Goal\nthe goal/);
   assert.match(view.view, /do the thing/);
 });
 
@@ -395,6 +395,30 @@ test("a loop still gets named after the supervisor compacts, from restored state
     .execute("id", { message: "Please run those parser tests again and fix whatever failure comes first" }, undefined, undefined, after.ctx);
 
   assert.match(again.content[0].text, /says much the same as instruction 1/);
+});
+
+test("/supervise look asks the worker for a fresh view, rather than the supervisor guessing", async () => {
+  // A supervisor whose turn ended without a view has no way back: only the worker makes views.
+  // wassname hit this when the supervisor died on an OpenRouter 402, and poking it with "," made
+  // it work from stale context and invent facts.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "worker make the results table");
+  await sup.run("supervise", "look");
+  assert.deepEqual(sup.published.filter((p) => p.t === "look"), [{ t: "look", to: WORKER_ID }]);
+
+  // And the worker answers with a view, so the round trip is real.
+  const worker = harness(WORKER_ID, { entries: [message("assistant", "WHAT I DID LAST")] });
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 5));
+  worker.deliver(SUPER_ID, { t: "look", to: WORKER_ID });
+  // The view waits on a real ps call for child pi processes, which takes tens of milliseconds.
+  await new Promise((r) => setTimeout(r, 300));
+
+  const view = worker.published.filter((p) => p.t === "view").at(-1);
+  assert.match(view.view, /WHAT I DID LAST/);
+  assert.equal(view.stopped, false, "asked for, so it is a check in and not a decision point");
 });
 
 test("waiting says the turn is over, so wait is not called four times running", async () => {
