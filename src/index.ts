@@ -8,11 +8,17 @@
  * own registry, so pairing on that ID cannot be forged by a payload.
  */
 import { Type } from "typebox";
-import {
-  INTERCOM_EXTENSION_REGISTER_EVENT,
-  type IntercomExtensionChannel,
-  type IntercomExtensionEvent,
+import type {
+  IntercomExtensionChannel,
+  IntercomExtensionEvent,
 } from "pi-intercom/extension-api.ts";
+
+/**
+ * Copied from pi-intercom/extension-api.ts, because a git install gets no node_modules/pi-intercom
+ * and a value import from it fails at load. The types above are erased, so they cost nothing.
+ * src/index.test.ts imports the real constant, so a rename in pi-intercom fails a test here.
+ */
+const INTERCOM_EXTENSION_REGISTER_EVENT = "intercom:extension-register";
 import { buildView, progressKey } from "./view.ts";
 import { childPiProcesses } from "./subagents.ts";
 import {
