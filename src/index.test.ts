@@ -94,6 +94,9 @@ function harness(ownId: string, { entries = [] as any[], isIdle = true, branch =
     async turnEnd() {
       for (const fn of handlers.get("turn_end") ?? []) await fn({}, ctx);
     },
+    async turnStart() {
+      for (const fn of handlers.get("turn_start") ?? []) await fn({}, ctx);
+    },
     async run(command: string, args: string) {
       await commands.get(command)!(args, ctx);
     },
@@ -542,6 +545,32 @@ test("reading one file over and over, with no edit, is a mid-run signal", async 
   (fresh.ctx.sessionManager.getBranch() as any[]).push(...edited);
   await fresh.turnEnd();
   assert.equal(fresh.published.filter((p) => p.t === "view").length, 0);
+});
+
+test("the supervisor gets a look at a working worker every couple of minutes, without being asked", async (t) => {
+  // A human supervising wanders past every few minutes. Waiting for the worker to stop is the
+  // thing this is meant to replace.
+  t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+  const worker = harness(WORKER_ID, { entries: [message("user", "do the thing")], isIdle: false });
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 5)); // pairing resolves the session id, which is async
+
+  await worker.turnStart();
+  t.mock.timers.tick(60_000);
+  assert.equal(worker.published.filter((p) => p.t === "view").length, 0, "one minute in is too early");
+
+  t.mock.timers.tick(90_000);
+  await new Promise((r) => setTimeout(r, 300)); // the look runs ps, so give the real clock a moment
+  const views = worker.published.filter((p) => p.t === "view");
+  assert.equal(views.length, 1, "past two minutes the supervisor gets a look");
+  assert.match(views[0].view, /status: working, \d+s into this turn/);
+
+  await worker.settle();
+  const after = worker.published.filter((p) => p.t === "view").length;
+  t.mock.timers.tick(600_000);
+  await new Promise((r) => setTimeout(r, 300)); // let any look that did start finish, so it counts
+  assert.equal(worker.published.filter((p) => p.t === "view").length, after, "a stopped worker is not watched");
 });
 
 test("a supervisor session publishes nothing on turn_end, even when its own turn looks stuck", async () => {

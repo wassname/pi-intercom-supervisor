@@ -40,11 +40,12 @@ compaction: the compactor's summary covers everything before it, pi-vcc compiles
 after. On top of that the view carries what a compactor has no reason to track: tool calls with no
 result, child pi processes, tool errors, and whether anything changed since the last review.
 
-Three of the original's behaviours are ported rather than reinvented, all MIT: mid-run signals
-(`src/signals.ts`, five tool errors in a row or five reads of one file with no edit, checked on
-`turn_end` so a worker an hour down the wrong path is caught before it stops), the process tree
+The supervisor looks at a working worker every two minutes, not only when the worker stops. That is
+the rate you wander past a second window yourself, and it costs one supervisor turn per interval per
+busy worker. Two of the original's checks interrupt that rhythm and look now: five tool errors in a
+row, or five reads of one file with no edit (`src/signals.ts`, MIT). Also ported: the process tree
 check (`src/subagents.ts`, `ps` for child pi processes, so a settled worker with a subagent still
-running is not called finished), and the SUPERVISOR.md precedence.
+running is not called finished) and the SUPERVISOR.md precedence.
 
 The process check is a snapshot where the original polls for two minutes. pi awaits the settle
 handler, so polling there holds the worker's own settle for the whole poll. The loop already does
@@ -73,16 +74,16 @@ instructions, and 0 on a paraphrase sharing no words, so it is a floor on repeti
 
 ## Limits
 
-The `done` guard sees child pi processes but not a detached job, a queue or a training run. Mid-run
-watching only fires on the two signals above, so quieter wrong paths still wait for the worker to
-stop. Views are cut to 15 KB, oldest turns first, because the broker drops anything over 16 KiB and
+The `done` guard sees child pi processes but not a detached job, a queue or a training run. Between
+looks the supervisor is blind, so two minutes of a wrong path is the worst case unless a signal
+fires. Views are cut to 15 KB, oldest turns first, because the broker drops anything over 16 KiB and
 never tells the extension. The last pair wins and nothing authenticates it. The stagnation count
 lives in memory and restarts at zero with the worker.
 
 ## Testing
 
 ```
-npm test                      # 54 tests, free apart from a ps call
+npm test                      # 55 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```

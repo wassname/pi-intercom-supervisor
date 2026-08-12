@@ -33,6 +33,14 @@ import { BRIEF, NO_GOAL, REVIEW_NUDGE, loadSupervisorPrompt } from "./prompts.ts
 /** How long the supervisor waits for the worker to acknowledge a pair before giving up on it. */
 const PAIR_ACK_TIMEOUT_MS = 10_000;
 
+/**
+ * How often the supervisor looks at a worker that is still working.
+ *
+ * One supervisor turn per interval per busy worker, so this is the token bill of watching. Two
+ * minutes is the wandering-past rate a human keeps; shorten it if you want a closer eye.
+ */
+const WATCH_INTERVAL_MS = 120_000;
+
 export default function (pi: any) {
   let channel: IntercomExtensionChannel | undefined;
   let state: SuperviseState = { ...EMPTY_STATE };
@@ -44,6 +52,10 @@ export default function (pi: any) {
   let staleReviews = 0;
   /** Worker side: the last mid-run signal published, so one stuck loop wakes the supervisor once. */
   let lastSignal = "";
+  /** Worker side: the routine look while a turn runs, and when the last view of any kind went out. */
+  let watchTimer: ReturnType<typeof setInterval> | undefined;
+  let lastLook = 0;
+  let turnStartedAt = 0;
   /** Supervisor side: cleared when the worker acknowledges the pair. */
   let pairTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -75,6 +87,8 @@ export default function (pi: any) {
   function reset(note: string) {
     clearTimeout(pairTimer);
     pairTimer = undefined;
+    clearInterval(watchTimer);
+    watchTimer = undefined;
     state = { ...EMPTY_STATE };
     latestView = "";
     lastProgress = "";
@@ -168,16 +182,42 @@ export default function (pi: any) {
     });
   });
 
+  /** Publish what the worker looks like right now. Used mid-turn, on a timer and on a signal. */
+  async function publishMidRun(context: any, why: string) {
+    // Claimed before the await, not after. ps takes long enough that a second timer tick would
+    // otherwise start its own look while this one is still waiting.
+    lastLook = Date.now();
+    const entries = context.sessionManager.getBranch() as any;
+    // Checked here too. This view replaces the one done reads, so leaving it out would report
+    // "child pi processes still running: none" and unblock done while a subagent is running.
+    const subagents = await childPiProcesses();
+    send({ t: "view", to: state.pairedId, view: buildView({ goal: state.goal, status: `working, ${why}`, entries, subagents }) });
+    debug("published mid-run view", { why, to: state.pairedId });
+  }
+
+  /**
+   * The timer look. A human supervising does not read every token; they wander past every few
+   * minutes and interrupt if the work has gone somewhere wrong. This is that, so the supervisor
+   * keeps roughly the perspective you would have with the two windows side by side.
+   */
   pi.on("turn_start", async (_event: unknown, context: any) => {
     ctx = context;
+    if (state.role !== "worker" || !channel || watchTimer) return;
+    watchTimer = setInterval(() => {
+      if (Date.now() - lastLook < WATCH_INTERVAL_MS) return;
+      publishMidRun(ctx, `${Math.round((Date.now() - turnStartedAt) / 1000)}s into this turn`).catch((err: Error) => {
+        debug("timer look failed", { error: err.message });
+      });
+    }, WATCH_INTERVAL_MS / 4);
+    turnStartedAt = Date.now();
   });
 
   /**
    * Fires after each LLM sub-turn, while the worker is still working.
    *
-   * Publishing here is what lets the supervisor catch a worker an hour down the wrong path, rather
-   * than waiting for it to stop. Only a new signal publishes, so a worker stuck on one error does
-   * not wake the supervisor every sub-turn.
+   * The timer above is the routine look. This is the interrupt: a signal means look now, before the
+   * next interval. Only a new signal publishes, so one stuck loop does not wake the supervisor every
+   * sub-turn.
    */
   pi.on("turn_end", async (_event: unknown, context: any) => {
     ctx = context;
@@ -187,12 +227,7 @@ export default function (pi: any) {
       const signal = detectSignal(entries.filter((e: any) => e.type === "message" && e.message).map((e: any) => e.message));
       if (!signal || signal.detail === lastSignal) return;
       lastSignal = signal.detail;
-      // Checked here too. This view replaces the one done reads, so leaving it out would report
-      // "child pi processes still running: none" and unblock done while a subagent is running.
-      const subagents = await childPiProcesses();
-      const view = buildView({ goal: state.goal, status: `working, ${signal.type}: ${signal.detail}`, entries, subagents });
-      send({ t: "view", to: state.pairedId, view });
-      debug("published mid-run view", { signal: signal.type, to: state.pairedId });
+      await publishMidRun(context, `${signal.type}: ${signal.detail}`);
     } catch (err) {
       debug("mid-run view failed", { error: (err as Error).message });
       context.ui?.notify?.(`intercom-supervisor: could not send the mid-run view, ${(err as Error).message}`, "error");
@@ -205,6 +240,8 @@ export default function (pi: any) {
     debug("agent_settled", { role: state.role, hasChannel: Boolean(channel) });
     if (state.role !== "worker" || !channel) return;
     lastSignal = "";
+    clearInterval(watchTimer); // the worker stopped, so there is nothing to watch until it starts again
+    watchTimer = undefined;
     try {
       // A subagent runs as its own process and leaves no unanswered tool call, so a settled worker
       // can still be spending. Report it and let the supervisor steer; do not wait here.
@@ -215,6 +252,7 @@ export default function (pi: any) {
       lastProgress = progress;
       const view = buildView({ goal: state.goal, status: "idle", entries, stale: staleReviews, subagents });
       send({ t: "view", to: state.pairedId, view });
+      lastLook = Date.now();
       debug("published view", { bytes: Buffer.byteLength(view), to: state.pairedId, stale: staleReviews, subagents });
     } catch (err) {
       // Nothing awaits this handler, so rethrowing would be an unhandled rejection nobody sees,
