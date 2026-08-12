@@ -12,6 +12,8 @@ session. That swap deleted the context pipeline, the four reframe tiers, the JSO
 the widget and the plugin API: 5201 lines of `src` down to 788.
 
 ```
+pi install https://github.com/wassname/pi-intercom-supervisor   # needs npm:pi-intercom too
+
 # terminal 1, the worker                # terminal 2, the supervisor
 pi                                      pi
                                         /supervise make the results table
