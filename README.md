@@ -61,6 +61,13 @@ screen when you watch a session. A worker going in circles says so there first, 
 the approach it is about to retry, before any file or commit changes. Only the newest block, and
 only its last 1200 characters, since a reasoning block ends on what it decided to do.
 
+Resume and `/reload` both restore the goal and the round count out of the transcript, which is
+where they belong. The paired session ID is not restored that way, because it addresses a live
+process that may have exited while you were away. Each side asks the broker who is actually
+connected and then says which it is: still supervising, or dropped because the other session is
+gone. A resumed supervisor also has its writing tools taken off again, which the `/supervise`
+handler alone would not do.
+
 The supervisor looks at a working worker every half hour, and again whenever the worker stops.
 Those two looks ask for different things. A stop is a decision point. A check in leans on `wait`,
 because interrupting a working agent costs it its train of thought. The original also ran two
@@ -116,7 +123,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 62 tests, free apart from a ps call
+npm test                      # 64 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```
