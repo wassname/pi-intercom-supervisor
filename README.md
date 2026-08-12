@@ -30,10 +30,12 @@ more than one it refuses and lists them, since guessing is worse than asking. Ru
 in the one you want and then `/supervise worker make the table`, or use the id it printed, which
 is the start of the `pi --session <id>` line in that terminal. `/supervise stop` ends it.
 
-A supervisor that comes back from a crash, a credit failure or a `/reload` asks the worker for a
-view by itself, so restarting the session is the whole recovery. Only the worker makes views, and
-a supervisor holding a stale one answers from the stale one, which is how it invents a fact.
-`/supervise look` does the same by hand if you want it now.
+A supervisor that comes back from a crash, a credit failure or a `/reload` says the goal and the
+answer shape again, then asks the worker for a view, so restarting the session is the whole
+recovery. Only the worker makes views, and a supervisor holding a stale one answers from the stale
+one, which is how it invents a fact. `/supervise look` does the same by hand if you want it now.
+The repeat matters because `/reload` is how a changed prompt reaches a running session, and the
+full brief goes out only at pairing.
 
 Subagents are skipped. `pi-subagents` registers every child run with the broker, so a worker with
 three of them running made `/supervise` refuse to pick between four sessions. Steering a subagent

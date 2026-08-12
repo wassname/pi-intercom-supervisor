@@ -489,6 +489,13 @@ test("a resume onto a live worker keeps supervising, and takes the writers back 
   // Asking beats waiting. A supervisor back from a crash or a /reload holds a stale picture, and
   // only the worker makes views. Nobody should have to know that, so a restart is the whole cure.
   assert.deepEqual(resumed.published.filter((p) => p.t === "look"), [{ t: "look", to: WORKER_ID }]);
+  // And the goal and the answer shape are said again, so a /reload is how a changed prompt lands.
+  // Without it, fixing the wording needs a fresh pairing, which loses the count of steers.
+  const anchor = resumed.userMessages.at(-1)!.content;
+  assert.match(anchor, /Supervising again/);
+  assert.match(anchor, /Goal: g/);
+  assert.match(anchor, /3 instructions so far/);
+  assert.match(anchor, /one tool call: steer, done or wait/);
   // The strip lives in the /supervise handler, which a resume never runs. Without this the
   // supervisor comes back with bash and edit in a directory the worker is writing to.
   const back = resumed.pi.getActiveTools();

@@ -59,6 +59,22 @@ with the reason "paired, waiting for the first view". Make the first answer a to
 every answer after it is a tool call too.`;
 
 /**
+ * Sent on a resume or a /reload that finds the pairing still alive.
+ *
+ * Short on purpose: the policy is already in the transcript above it. Only the answer shape and the
+ * goal repeat, because those are what a supervisor drops first, and because a /reload is how a
+ * changed prompt reaches a running session. Without this, fixing the wording of the brief needs
+ * /supervise stop and a fresh pairing, which throws away the supervisor's memory of its own steers.
+ */
+export const REANCHOR = (goal: string, rounds: number) =>
+  `Supervising again, after a reload or a restart.
+Goal: ${goal || "not set"}
+${rounds} instructions so far.
+
+A view of the worker follows. Answer it with one tool call: steer, done or wait. The word on its
+own does nothing; only the call reaches the worker.`;
+
+/**
  * The three verdicts. These live in the tool descriptions, which the API sends at every model call,
  * so they are the only instructions here that a supervisor compaction cannot lose.
  */

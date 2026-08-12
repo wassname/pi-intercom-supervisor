@@ -37,6 +37,7 @@ import {
   BRIEF,
   DONE_BLOCKED,
   NO_GOAL,
+  REANCHOR,
   REVIEW_NUDGE,
   TOOL_DONE,
   TOOL_STEER,
@@ -209,6 +210,10 @@ export default function (pi: any) {
     // The strip lives in the /supervise handler and savedTools is memory, so a resumed supervisor
     // has bash and the edit tools back in a directory the worker is writing to.
     stripWriters();
+    // Say the goal and the answer shape again. A /reload is how a changed prompt reaches a running
+    // session, and the brief goes out only at pairing, so without this a wording fix needs a fresh
+    // pairing and loses the supervisor's memory of its own steers.
+    pi.sendUserMessage(REANCHOR(state.goal, state.steerRounds));
     // Ask for a view rather than wait for one. A supervisor that came back from a crash, a credit
     // failure or a /reload holds a stale picture, and answering from a stale picture is how it
     // invents a fact. Only the worker makes views, so it has to ask, and nobody should have to
