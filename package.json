@@ -25,6 +25,14 @@
     "extensions": ["./src/index.ts"],
     "image": "https://cdn.jsdelivr.net/gh/wassname/pi-intercom-supervisor@main/media/screenshot.png"
   },
+  "files": [
+    "src",
+    "!src/*.test.ts",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "pretest": "tsx scripts/make-fixture.ts",
     "test": "tsx --test src/*.test.ts"
