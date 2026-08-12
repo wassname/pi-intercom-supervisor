@@ -18,6 +18,8 @@ pi -n worker                            pi -n supervisor
 > do the work
 ```
 
+![worker and supervisor side by side: the steer lands in the worker's transcript while the supervisor waits for the next view](media/screenshot.png)
+
 Both sessions load this extension and pick their role at runtime. The worker runs as ordinary pi.
 When it stops, the supervisor gets a view of it and calls `steer` with one concrete next action, or
 `done`. If it needs a human it replies in plain text instead of calling a tool, and that is what

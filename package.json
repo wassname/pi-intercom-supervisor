@@ -2,9 +2,28 @@
   "name": "@wassname2/pi-intercom-supervisor",
   "version": "0.0.1",
   "description": "pi extension: a supervisor pi session watches a worker pi session over pi-intercom, and steers it",
+  "author": "wassname",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wassname/pi-supervise.git"
+  },
+  "homepage": "https://github.com/wassname/pi-supervise#readme",
+  "bugs": {
+    "url": "https://github.com/wassname/pi-supervise/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "supervisor",
+    "pi-intercom",
+    "steering",
+    "multi-agent"
+  ],
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": ["./src/index.ts"],
+    "image": "https://cdn.jsdelivr.net/gh/wassname/pi-supervise@main/media/screenshot.png"
   },
   "scripts": {
     "pretest": "tsx scripts/make-fixture.ts",
