@@ -91,9 +91,6 @@ function harness(ownId: string, { entries = [] as any[], isIdle = true, branch =
     async settle() {
       for (const fn of handlers.get("agent_settled") ?? []) await fn({}, ctx);
     },
-    async turnEnd() {
-      for (const fn of handlers.get("turn_end") ?? []) await fn({}, ctx);
-    },
     async turnStart() {
       for (const fn of handlers.get("turn_start") ?? []) await fn({}, ctx);
     },
@@ -296,6 +293,21 @@ test("goal, pairing and the steer count all survive a reload together", async ()
   assert.deepEqual(restored.recentSteers, ["instruction 0", "instruction 1", "instruction 2"]);
 });
 
+test("a view that arrives while the supervisor is thinking is queued, not dropped", async () => {
+  // pi throws "Agent is already processing" when sendUserMessage gets no delivery option, and the
+  // catch upstream turns that into a dropped message. On a two minute look the supervisor would
+  // silently skip a whole look.
+  const sup = harness(SUPER_ID, { isIdle: false });
+  await sup.start();
+  await sup.run("supervise", "worker g");
+  sup.userMessages.length = 0;
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal\ng\n" });
+  await new Promise((r) => setTimeout(r, 5));
+
+  assert.equal(sup.userMessages.length, 1, "the view must still reach the supervisor");
+  assert.deepEqual(sup.userMessages[0].options, { deliverAs: "followUp" });
+});
+
 test("the supervisor is shown its recent instructions, so it can see a loop after compaction", async () => {
   const sup = harness(SUPER_ID);
   await sup.start();
@@ -488,65 +500,6 @@ test("supervising a second session is refused while the first is still paired", 
   assert.match(sup.notices.join("\n"), /already paired/);
 });
 
-test("a worker stuck mid-turn wakes the supervisor once, not every sub-turn", async () => {
-  // Without this the supervisor only looks when the worker stops, so an hour down the wrong path
-  // is an hour nobody looks.
-  const entries: any[] = [];
-  const worker = harness(WORKER_ID, { entries, isIdle: false });
-  await worker.start();
-  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
-  await new Promise((r) => setTimeout(r, 5));
-
-  const failing = (n: number) => [
-    { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: `c${n}`, name: "bash", arguments: { command: "npm test" } }] } },
-    { type: "message", message: { role: "toolResult", toolName: "bash", toolCallId: `c${n}`, isError: true, content: [{ type: "text", text: "cannot find module" }] } },
-  ];
-
-  for (let i = 0; i < 4; i++) {
-    entries.push(...failing(i));
-    await worker.turnEnd();
-  }
-  assert.equal(worker.published.filter((p) => p.t === "view").length, 0, "four errors is not yet a signal");
-
-  entries.push(...failing(4));
-  await worker.turnEnd();
-  const views = worker.published.filter((p) => p.t === "view");
-  assert.equal(views.length, 1, "the fifth error in a row publishes");
-  assert.match(views[0].view, /status: working, tool_error: bash: cannot find module/);
-
-  await worker.turnEnd();
-  assert.equal(worker.published.filter((p) => p.t === "view").length, 1, "the same signal must not publish again");
-});
-
-test("reading one file over and over, with no edit, is a mid-run signal", async () => {
-  const entries: any[] = [];
-  const worker = harness(WORKER_ID, { entries, isIdle: false });
-  await worker.start();
-  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
-  await new Promise((r) => setTimeout(r, 5));
-
-  const read = (path: string) => ({
-    type: "message",
-    message: { role: "assistant", content: [{ type: "toolCall", id: "r", name: "read", arguments: { path } }] },
-  });
-  for (let i = 0; i < 5; i++) entries.push(read("src/view.ts"));
-  await worker.turnEnd();
-  assert.match(worker.published.find((p) => p.t === "view").view, /status: working, file_read_loop: src\/view\.ts/);
-
-  // An edit to that file says the reading was going somewhere, so the count starts again.
-  const fresh = harness(WORKER_ID, { entries: [], isIdle: false });
-  await fresh.start();
-  fresh.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
-  await new Promise((r) => setTimeout(r, 5));
-  const edited = [read("a.ts"), read("a.ts"), {
-    type: "message",
-    message: { role: "assistant", content: [{ type: "toolCall", id: "e", name: "edit", arguments: { path: "a.ts" } }] },
-  }, read("a.ts"), read("a.ts"), read("a.ts")];
-  (fresh.ctx.sessionManager.getBranch() as any[]).push(...edited);
-  await fresh.turnEnd();
-  assert.equal(fresh.published.filter((p) => p.t === "view").length, 0);
-});
-
 test("the supervisor gets a look at a working worker every couple of minutes, without being asked", async (t) => {
   // A human supervising wanders past every few minutes. Waiting for the worker to stop is the
   // thing this is meant to replace.
@@ -565,57 +518,14 @@ test("the supervisor gets a look at a working worker every couple of minutes, wi
   const views = worker.published.filter((p) => p.t === "view");
   assert.equal(views.length, 1, "past two minutes the supervisor gets a look");
   assert.match(views[0].view, /status: working, \d+s into this turn/);
+  // A look that forgets the subagent line reports "none" and unblocks done while one is running.
+  assert.match(views[0].view, /^child pi processes still running: /m);
 
   await worker.settle();
   const after = worker.published.filter((p) => p.t === "view").length;
   t.mock.timers.tick(600_000);
   await new Promise((r) => setTimeout(r, 300)); // let any look that did start finish, so it counts
   assert.equal(worker.published.filter((p) => p.t === "view").length, after, "a stopped worker is not watched");
-});
-
-test("a supervisor session publishes nothing on turn_end, even when its own turn looks stuck", async () => {
-  // The supervisor reads views, it does not send them. Its own failing tool calls are its business.
-  const entries: any[] = [];
-  for (let i = 0; i < 6; i++) {
-    entries.push(
-      { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: `c${i}`, name: "read", arguments: { path: "same.ts" } }] } },
-      { type: "message", message: { role: "toolResult", toolName: "read", toolCallId: `c${i}`, isError: true, content: [{ type: "text", text: "no such file" }] } },
-    );
-  }
-  const sup = harness(SUPER_ID, { entries });
-  await sup.start();
-  await sup.run("supervise", "worker g");
-  const sent = sup.published.length;
-  await sup.turnEnd();
-  assert.equal(sup.published.length, sent);
-});
-
-test("a mid-run view still reports the running subagent, so done stays refused", async (t) => {
-  // The mid-run view replaces the one done reads. Leaving the subagent line out of it reported
-  // "none" and unblocked done while a subagent was still spending.
-  if (process.platform !== "linux" && process.platform !== "darwin") return t.skip("ps only");
-  const dir = mkdtempSync(join(tmpdir(), "supervisor-test-"));
-  const fake = join(dir, "pi");
-  copyFileSync("/usr/bin/sleep", fake);
-  const child = spawn(fake, ["30"], { stdio: "ignore" });
-  await new Promise((r) => setTimeout(r, 300));
-
-  const entries: any[] = [];
-  const worker = harness(WORKER_ID, { entries, isIdle: false });
-  await worker.start();
-  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
-  await new Promise((r) => setTimeout(r, 5));
-  for (let i = 0; i < 5; i++) {
-    entries.push(
-      { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: `c${i}`, name: "bash", arguments: {} }] } },
-      { type: "message", message: { role: "toolResult", toolName: "bash", toolCallId: `c${i}`, isError: true, content: [{ type: "text", text: "boom" }] } },
-    );
-  }
-  await worker.turnEnd();
-  child.kill();
-
-  const view = worker.published.find((p) => p.t === "view").view;
-  assert.match(view, new RegExp(`^child pi processes still running: ${child.pid}$`, "m"));
 });
 
 test("the worker counts reviews in a row where nothing changed", async () => {

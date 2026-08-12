@@ -14,7 +14,6 @@ import {
   type IntercomExtensionEvent,
 } from "pi-intercom/extension-api.ts";
 import { buildView, progressKey } from "./view.ts";
-import { detectSignal } from "./signals.ts";
 import { childPiProcesses } from "./subagents.ts";
 import {
   EMPTY_STATE,
@@ -50,8 +49,6 @@ export default function (pi: any) {
   /** Worker side: the last progressKey, and how many reviews in a row have matched it. */
   let lastProgress = "";
   let staleReviews = 0;
-  /** Worker side: the last mid-run signal published, so one stuck loop wakes the supervisor once. */
-  let lastSignal = "";
   /** Worker side: the routine look while a turn runs, and when the last view of any kind went out. */
   let watchTimer: ReturnType<typeof setInterval> | undefined;
   let lastLook = 0;
@@ -149,7 +146,13 @@ export default function (pi: any) {
 
     if (wire.t === "view" && state.role === "supervisor") {
       latestView = wire.view;
-      pi.sendUserMessage(REVIEW_NUDGE(wire.view, state.steerRounds, state.recentSteers));
+      // followUp, not steer: let the supervisor finish the decision it is making, then look again.
+      // With no option at all pi throws "Agent is already processing" and the view is lost, which
+      // on a two minute look means the supervisor skips a whole look for no visible reason.
+      pi.sendUserMessage(
+        REVIEW_NUDGE(wire.view, state.steerRounds, state.recentSteers),
+        ctx?.isIdle() ? undefined : { deliverAs: "followUp" },
+      );
       return;
     }
 
@@ -212,34 +215,11 @@ export default function (pi: any) {
     turnStartedAt = Date.now();
   });
 
-  /**
-   * Fires after each LLM sub-turn, while the worker is still working.
-   *
-   * The timer above is the routine look. This is the interrupt: a signal means look now, before the
-   * next interval. Only a new signal publishes, so one stuck loop does not wake the supervisor every
-   * sub-turn.
-   */
-  pi.on("turn_end", async (_event: unknown, context: any) => {
-    ctx = context;
-    if (state.role !== "worker" || !channel) return;
-    try {
-      const entries = context.sessionManager.getBranch() as any;
-      const signal = detectSignal(entries.filter((e: any) => e.type === "message" && e.message).map((e: any) => e.message));
-      if (!signal || signal.detail === lastSignal) return;
-      lastSignal = signal.detail;
-      await publishMidRun(context, `${signal.type}: ${signal.detail}`);
-    } catch (err) {
-      debug("mid-run view failed", { error: (err as Error).message });
-      context.ui?.notify?.(`intercom-supervisor: could not send the mid-run view, ${(err as Error).message}`, "error");
-    }
-  });
-
   /** Fires only when no retry, compaction, or queued continuation will run, so the worker is truly done. */
   pi.on("agent_settled", async (_event: unknown, context: any) => {
     ctx = context;
     debug("agent_settled", { role: state.role, hasChannel: Boolean(channel) });
     if (state.role !== "worker" || !channel) return;
-    lastSignal = "";
     clearInterval(watchTimer); // the worker stopped, so there is nothing to watch until it starts again
     watchTimer = undefined;
     try {
