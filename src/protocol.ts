@@ -15,7 +15,8 @@ export type Wire =
   | { t: "pair"; to: string; goal: string }
   | { t: "paired"; to: string }
   | { t: "goal"; to: string; goal: string }
-  | { t: "view"; to: string; view: string }
+  /** stopped: the worker settled, so this is a decision point. false: a check in mid-turn. */
+  | { t: "view"; to: string; view: string; stopped: boolean }
   | { t: "directive"; to: string; text: string }
   | { t: "done"; to: string; reason: string }
   | { t: "unpair"; to: string };
@@ -23,10 +24,10 @@ export type Wire =
 /** Validates the field each kind carries, so a malformed peer cannot inject "[supervisor] undefined". */
 export function isWire(payload: unknown): payload is Wire {
   if (typeof payload !== "object" || payload === null) return false;
-  const { t, to, goal, view, text, reason } = payload as Record<string, unknown>;
+  const { t, to, goal, view, stopped, text, reason } = payload as Record<string, unknown>;
   if (typeof to !== "string") return false;
   if (t === "pair" || t === "goal") return typeof goal === "string";
-  if (t === "view") return typeof view === "string";
+  if (t === "view") return typeof view === "string" && typeof stopped === "boolean";
   if (t === "directive") return typeof text === "string" && text.trim().length > 0;
   if (t === "done") return typeof reason === "string";
   return t === "unpair" || t === "paired";

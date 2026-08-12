@@ -216,13 +216,31 @@ test("a goal the supervisor inferred reaches the worker, which owns the view hea
   worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "" });
   await new Promise((r) => setTimeout(r, 5));
   await worker.settle();
-  assert.match(worker.published.find((p) => p.t === "view").view, /^not set$/m, "no goal yet");
+  assert.match(worker.published.find((p) => p.t === "view").view, /^# Goal: not set$/m, "no goal yet");
 
   worker.deliver(SUPER_ID, { t: "goal", to: WORKER_ID, goal: "make the results table" });
   await new Promise((r) => setTimeout(r, 5));
   await worker.settle();
   const views = worker.published.filter((p) => p.t === "view");
-  assert.match(views[views.length - 1].view, /^make the results table$/m, "the header must follow set_goal");
+  assert.match(views[views.length - 1].view, /^# Goal: make the results table$/m, "the header must follow set_goal");
+});
+
+test("the second view carries only what happened after the first", async () => {
+  // Without the mark advancing, review N re-sends reviews 1..N-1 into a session that has them.
+  const entries = [message("user", "THE FIRST INSTRUCTION")];
+  const worker = harness(WORKER_ID, { entries });
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 5));
+
+  await worker.settle();
+  assert.match(worker.published.find((p) => p.t === "view").view, /THE FIRST INSTRUCTION/);
+
+  entries.push(message("assistant", "THE SECOND THING"));
+  await worker.settle();
+  const second = worker.published.filter((p) => p.t === "view").at(-1).view;
+  assert.match(second, /THE SECOND THING/);
+  assert.doesNotMatch(second, /THE FIRST INSTRUCTION/, "the supervisor already read this one");
 });
 
 test("a message addressed to a different session is ignored", async () => {
@@ -246,7 +264,7 @@ test("on settle the worker publishes a view built from the live branch", async (
   const view = worker.published.find((p) => p.t === "view");
   assert.ok(view, "expected a view publish");
   assert.equal(view.to, SUPER_ID);
-  assert.match(view.view, /# Goal, as the human or the supervisor set it\nthe goal/);
+  assert.match(view.view, /# Goal: the goal/);
   assert.match(view.view, /do the thing/);
 });
 
@@ -315,14 +333,16 @@ test("a view that arrives while the supervisor is thinking is queued, not droppe
   await sup.start();
   await sup.run("supervise", "worker g");
   sup.userMessages.length = 0;
-  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal\ng\n" });
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal: g\n", stopped: true });
   await new Promise((r) => setTimeout(r, 5));
 
   assert.equal(sup.userMessages.length, 1, "the view must still reach the supervisor");
   assert.deepEqual(sup.userMessages[0].options, { deliverAs: "followUp" });
 });
 
-test("the supervisor is shown its recent instructions, so it can see a loop after compaction", async () => {
+test("the nudge repeats neither the instructions already sent nor the verdict rules", async () => {
+  // Both used to be in every nudge. The steer calls are already in the supervisor's own context,
+  // and the verdict rules are in the tool descriptions, which the API sends at every model call.
   const sup = harness(SUPER_ID);
   await sup.start();
   await sup.run("supervise", "worker fix the tests");
@@ -332,14 +352,49 @@ test("the supervisor is shown its recent instructions, so it can see a loop afte
   }
 
   sup.userMessages.length = 0;
-  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal\nfix the tests\n" });
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal: fix the tests\n", stopped: true });
   await new Promise((r) => setTimeout(r, 5));
 
   const nudge = sup.userMessages.at(-1)!.content;
-  assert.match(nudge, /You already sent these instructions/);
-  assert.match(nudge, /instruction 8/, "the newest instruction must be shown");
-  assert.doesNotMatch(nudge, /instruction 0\b/, "only the last few are kept");
-  assert.match(nudge, /no round limit/);
+  assert.doesNotMatch(nudge, /instruction \d/, "the supervisor already has its own steer calls");
+  assert.match(nudge, new RegExp(`${STEER_MEMORY + 3} instructions so far`), "the count is the cheap part, so it stays");
+  assert.ok(nudge.length < 400, `the nudge is sent every look, so it stays short: ${nudge.length} chars`);
+});
+
+test("a check in and a worker that stopped ask for different things", async () => {
+  // Interrupting a working agent costs it its train of thought, so a check in leans on wait.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "worker fix the tests");
+
+  sup.userMessages.length = 0;
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal: g\n", stopped: false });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.match(sup.userMessages.at(-1)!.content, /Call wait unless this is going somewhere wrong/);
+
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal: g\n", stopped: true });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.match(sup.userMessages.at(-1)!.content, /The worker stopped/);
+});
+
+test("a loop still gets named after the supervisor compacts, from restored state", async () => {
+  // The nudge no longer lists past instructions, so this is the only thing left that catches a
+  // repeat once a compaction has taken the supervisor's own steer calls out of its context.
+  const first = harness(SUPER_ID);
+  await first.start();
+  await first.run("supervise", "worker fix the tests");
+  await first.tools.get("steer")!
+    .execute("id", { message: "Run the failing parser tests and fix the first failure" }, undefined, undefined, first.ctx);
+
+  const carried = first.appended
+    .filter((e) => e.type === STATE_ENTRY)
+    .map((e) => ({ type: "custom", customType: e.type, data: e.data }));
+  const after = harness(SUPER_ID, { entries: carried });
+  await after.start();
+  const again = await after.tools.get("steer")!
+    .execute("id", { message: "Please run those parser tests again and fix whatever failure comes first" }, undefined, undefined, after.ctx);
+
+  assert.match(again.content[0].text, /says much the same as instruction 1/);
 });
 
 test("state written before recentSteers existed still loads", () => {
@@ -425,7 +480,7 @@ test("done is refused while the worker has an unanswered tool call", async () =>
     status: "idle",
     entries: [{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "x", name: "subagent", arguments: {} }] } }],
   });
-  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view });
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view, stopped: true });
   await new Promise((r) => setTimeout(r, 5));
 
   const blocked = await sup.tools.get("done")!.execute("id", { reason: "looks finished" }, undefined, undefined, sup.ctx);
@@ -434,7 +489,7 @@ test("done is refused while the worker has an unanswered tool call", async () =>
 
   // Same guard, the other half: a subagent running as its own process leaves no unanswered call.
   const detached = buildView({ goal: "finish the sweep", status: "idle", entries: [message("assistant", "all done")], subagents: [4242] });
-  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: detached });
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: detached, stopped: true });
   await new Promise((r) => setTimeout(r, 5));
   const stillBusy = await sup.tools.get("done")!.execute("id", { reason: "looks finished" }, undefined, undefined, sup.ctx);
   assert.ok(stillBusy.isError, "done must be refused while a child pi process is running");
@@ -446,7 +501,7 @@ test("done is allowed once nothing is outstanding", async () => {
   await sup.start();
   await sup.run("supervise", "worker finish the sweep");
   const view = buildView({ goal: "finish the sweep", status: "idle", entries: [message("assistant", "all done")] });
-  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view });
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view, stopped: true });
   await new Promise((r) => setTimeout(r, 5));
 
   const ok = await sup.tools.get("done")!.execute("id", { reason: "results.md line 3 says X" }, undefined, undefined, sup.ctx);
@@ -494,7 +549,7 @@ test("the view of the old worker cannot be used to judge the new one", async () 
   const sup = harness(SUPER_ID);
   await sup.start();
   await sup.run("supervise", "worker g");
-  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal, as the human or the supervisor set it\nold worker\n" });
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal: old worker\n", stopped: true });
   await new Promise((r) => setTimeout(r, 5));
   await sup.run("supervise", "stop");
   await sup.run("supervise", "worker g2");
@@ -561,9 +616,9 @@ test("supervising a second session is refused while the first is still paired", 
   assert.match(sup.notices.join("\n"), /already paired/);
 });
 
-test("the supervisor gets a look at a working worker every couple of minutes, without being asked", async (t) => {
-  // A human supervising wanders past every few minutes. Waiting for the worker to stop is the
-  // thing this is meant to replace.
+test("the supervisor gets a look at a working worker every half hour, without being asked", async (t) => {
+  // A human supervising wanders past now and then. Waiting for the worker to stop is the thing
+  // this is meant to replace.
   t.mock.timers.enable({ apis: ["setInterval", "Date"] });
   const worker = harness(WORKER_ID, { entries: [message("user", "do the thing")], isIdle: false });
   await worker.start();
@@ -571,13 +626,14 @@ test("the supervisor gets a look at a working worker every couple of minutes, wi
   await new Promise((r) => setTimeout(r, 5)); // pairing resolves the session id, which is async
 
   await worker.turnStart();
-  t.mock.timers.tick(60_000);
-  assert.equal(worker.published.filter((p) => p.t === "view").length, 0, "one minute in is too early");
+  t.mock.timers.tick(1_500_000);
+  assert.equal(worker.published.filter((p) => p.t === "view").length, 0, "25 minutes in is too early");
 
-  t.mock.timers.tick(90_000);
+  t.mock.timers.tick(400_000);
   await new Promise((r) => setTimeout(r, 300)); // the look runs ps, so give the real clock a moment
   const views = worker.published.filter((p) => p.t === "view");
-  assert.equal(views.length, 1, "past two minutes the supervisor gets a look");
+  assert.equal(views.length, 1, "past half an hour the supervisor gets a look");
+  assert.equal(views[0].stopped, false, "a mid-turn look is a check in, not a decision point");
   assert.match(views[0].view, /status: working, \d+s into this turn/);
   // A look that forgets the subagent line reports "none" and unblocks done while one is running.
   assert.match(views[0].view, /^child pi processes still running: /m);

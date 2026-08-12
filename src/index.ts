@@ -19,7 +19,7 @@ import type {
  * src/index.test.ts imports the real constant, so a rename in pi-intercom fails a test here.
  */
 const INTERCOM_EXTENSION_REGISTER_EVENT = "intercom:extension-register";
-import { buildView, progressKey } from "./view.ts";
+import { buildView, progressKey, turnsSince } from "./view.ts";
 import { childPiProcesses } from "./subagents.ts";
 import {
   EMPTY_STATE,
@@ -33,18 +33,31 @@ import {
   type SuperviseState,
   type Wire,
 } from "./protocol.ts";
-import { BRIEF, NO_GOAL, REVIEW_NUDGE, loadSupervisorPrompt } from "./prompts.ts";
+import {
+  BRIEF,
+  DONE_BLOCKED,
+  NO_GOAL,
+  REVIEW_NUDGE,
+  TOOL_DONE,
+  TOOL_STEER,
+  TOOL_WAIT,
+  loadSupervisorPrompt,
+} from "./prompts.ts";
 
 /** How long the supervisor waits for the worker to acknowledge a pair before giving up on it. */
 const PAIR_ACK_TIMEOUT_MS = 10_000;
 
 /**
- * How often the supervisor looks at a worker that is still working.
+ * How often the supervisor looks at a worker that is still working. It also looks when the worker
+ * stops, whatever this is set to, so a short turn is never missed.
  *
- * One supervisor turn per interval per busy worker, so this is the token bill of watching. Two
- * minutes is the wandering-past rate a human keeps; shorten it if you want a closer eye.
+ * One supervisor turn per interval per busy worker, so this is the token bill of watching. Half an
+ * hour is the wandering-past rate a human keeps; shorten it if you want a closer eye.
  */
-const WATCH_INTERVAL_MS = 120_000;
+const WATCH_INTERVAL_MS = 1_800_000;
+
+/** How often the timer checks whether a look is due. Sets how late a look can be, nothing else. */
+const WATCH_POLL_MS = 30_000;
 
 /**
  * Tools taken away from a supervising session, and given back when supervision ends.
@@ -70,6 +83,8 @@ export default function (pi: any) {
   /** Worker side: the last progressKey, and how many reviews in a row have matched it. */
   let lastProgress = "";
   let staleReviews = 0;
+  /** Worker side: how many turns the supervisor has already been sent, so views carry only the new ones. */
+  let sentTurns = 0;
   /** Worker side: the routine look while a turn runs, and when the last view of any kind went out. */
   let watchTimer: ReturnType<typeof setInterval> | undefined;
   let lastLook = 0;
@@ -117,6 +132,7 @@ export default function (pi: any) {
     latestView = "";
     lastProgress = "";
     staleReviews = 0;
+    sentTurns = 0;
     save();
     ctx?.ui?.notify?.(note, "info");
   }
@@ -177,7 +193,7 @@ export default function (pi: any) {
       // With no option at all pi throws "Agent is already processing" and the view is lost, which
       // on a two minute look means the supervisor skips a whole look for no visible reason.
       pi.sendUserMessage(
-        REVIEW_NUDGE(wire.view, state.steerRounds, state.recentSteers),
+        REVIEW_NUDGE(wire.view, state.steerRounds, wire.stopped),
         ctx?.isIdle() ? undefined : { deliverAs: "followUp" },
       );
       return;
@@ -221,8 +237,10 @@ export default function (pi: any) {
     // Checked here too. This view replaces the one done reads, so leaving it out would report
     // "child pi processes still running: none" and unblock done while a subagent is running.
     const subagents = await childPiProcesses();
-    send({ t: "view", to: state.pairedId, view: buildView({ goal: state.goal, status: `working, ${why}`, entries, subagents }) });
-    debug("published mid-run view", { why, to: state.pairedId });
+    const view = buildView({ goal: state.goal, status: `working, ${why}`, entries, since: sentTurns, subagents });
+    sentTurns = turnsSince(entries);
+    send({ t: "view", to: state.pairedId, view, stopped: false });
+    debug("published mid-run view", { why, to: state.pairedId, sentTurns });
   }
 
   /**
@@ -238,7 +256,7 @@ export default function (pi: any) {
       publishMidRun(ctx, `${Math.round((Date.now() - turnStartedAt) / 1000)}s into this turn`).catch((err: Error) => {
         debug("timer look failed", { error: err.message });
       });
-    }, WATCH_INTERVAL_MS / 4);
+    }, WATCH_POLL_MS);
     turnStartedAt = Date.now();
   });
 
@@ -257,8 +275,9 @@ export default function (pi: any) {
       const progress = progressKey(entries);
       staleReviews = progress === lastProgress ? staleReviews + 1 : 0;
       lastProgress = progress;
-      const view = buildView({ goal: state.goal, status: "idle", entries, stale: staleReviews, subagents });
-      send({ t: "view", to: state.pairedId, view });
+      const view = buildView({ goal: state.goal, status: "idle", entries, since: sentTurns, stale: staleReviews, subagents });
+      sentTurns = turnsSince(entries);
+      send({ t: "view", to: state.pairedId, view, stopped: true });
       lastLook = Date.now();
       debug("published view", { bytes: Buffer.byteLength(view), to: state.pairedId, stale: staleReviews, subagents });
     } catch (err) {
@@ -384,7 +403,7 @@ Tell them in your reply, quoting it, so they can correct it.`,
   pi.registerTool({
     name: "steer",
     label: "Steer worker",
-    description: "Send one concrete next action to the worker. It arrives as a user message in the worker session.",
+    description: TOOL_STEER,
     parameters: Type.Object({ message: Type.String({ description: "One concrete next action, 1 to 3 sentences." }) }),
     execute: async (_id: string, params: { message: string }) => {
       if (state.role !== "supervisor") {
@@ -418,10 +437,31 @@ Tell them in your reply, quoting it, so they can correct it.`,
     },
   });
 
+  /**
+   * The third verdict, and the one that stops a fabricated steer.
+   *
+   * Observed 2026-08-12: with only steer and done on offer, a supervisor with nothing to say wrote
+   * "the harness demands a tool call ... the least-bad option is a steer that adds something new",
+   * ran a command that printed nothing, then reported a job was at "turn 47 of 80". The real log
+   * said 75 of 80. Forcing a verdict every look is what bought that number.
+   */
+  pi.registerTool({
+    name: "wait",
+    label: "Wait, nothing to change",
+    description: TOOL_WAIT,
+    parameters: Type.Object({ reason: Type.String({ description: "What in the view says it is on track, in one line." }) }),
+    execute: async (_id: string, params: { reason: string }) => {
+      if (state.role !== "supervisor") {
+        return { content: [{ type: "text", text: "Not supervising." }], isError: true };
+      }
+      return { content: [{ type: "text", text: `Waiting: ${params.reason}` }] };
+    },
+  });
+
   pi.registerTool({
     name: "done",
     label: "Finish supervision",
-    description: "Declare the goal met and stop supervising. Only call this with quoted evidence from the view.",
+    description: TOOL_DONE,
     parameters: Type.Object({ reason: Type.String({ description: "The artifact path and the quoted line that proves it." }) }),
     execute: async (_id: string, params: { reason: string }) => {
       if (state.role !== "supervisor") {
@@ -434,7 +474,7 @@ Tell them in your reply, quoting it, so they can correct it.`,
         ?? latestView.match(/^child pi processes still running: (?!none)(.+)$/m);
       if (pending) {
         return {
-          content: [{ type: "text", text: `Cannot finish: the worker still has work running (${pending[1]}). Wait for the next view.` }],
+          content: [{ type: "text", text: DONE_BLOCKED(pending[1]) }],
           isError: true,
         };
       }

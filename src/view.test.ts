@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MAX_VIEW_BYTES, buildView, outstandingWork, problems, progressKey, type Entry } from "./view.ts";
+import { MAX_VIEW_BYTES, buildView, outstandingWork, problems, progressKey, turnsSince, type Entry } from "./view.ts";
 
 function assistant(text: string, calls: Array<{ name: string; args: Record<string, unknown> }> = []): Entry {
   return {
@@ -18,6 +18,36 @@ function assistant(text: string, calls: Array<{ name: string; args: Record<strin
 function toolResult(toolName: string, text: string, isError = false): Entry {
   return { type: "message", message: { role: "toolResult", toolName, isError, content: [{ type: "text", text }] } };
 }
+
+test("a view carries only the turns the supervisor has not been sent", () => {
+  // The supervisor is a real session and keeps every view it read, so re-sending the whole
+  // transcript each time is a second copy of what it already has. It grows with every review.
+  const entries = [assistant("the first thing I did"), assistant("the second thing I did")];
+  const first = buildView({ goal: "g", status: "idle", entries });
+  assert.match(first, /the first thing I did/);
+  assert.equal(turnsSince(entries), 2);
+
+  entries.push(assistant("the third thing I did"));
+  const next = buildView({ goal: "g", status: "idle", entries, since: 2 });
+  assert.match(next, /the third thing I did/);
+  assert.doesNotMatch(next, /the first thing I did/, "already sent, so it must not go again");
+  assert.match(next, /# New turns since your last look \(1 of 3\)/);
+});
+
+test("a compaction restarts the view, so no turn falls into the gap", () => {
+  // getBranch keeps the entries a compaction replaced, so the mark now points past the end. Read
+  // the wrong slice here and the supervisor silently reads a piece of the old history.
+  const entries: Entry[] = [
+    assistant("old work"),
+    { type: "compaction", summary: "SUMMARY OF THE OLD WORK" },
+    assistant("work after the compaction"),
+  ];
+  const view = buildView({ goal: "g", status: "idle", entries, since: 9 });
+  assert.match(view, /The worker compacted, so this view restarts/);
+  assert.match(view, /SUMMARY OF THE OLD WORK/);
+  assert.match(view, /work after the compaction/);
+  assert.equal(turnsSince(entries), 1, "the mark restarts from the compaction, not from the session");
+});
 
 test("pi-vcc reports the files the worker wrote, and separates them from the ones it read", () => {
   const view = buildView({
@@ -168,7 +198,7 @@ test("pi-vcc's sections and its transcript land on the right sides of the split"
     status: "idle",
     entries: [{ type: "message", message: { role: "user", content: "make the results table" } }],
   });
-  const [above, below] = view.split("# Recent turns");
+  const [above, below] = view.split("# Turns so far");
   assert.match(above, /\[Session Goal\]/, "the sections belong above");
   assert.match(below, /make the results table/, "the transcript belongs below");
   assert.doesNotMatch(below, /\[Session Goal\]/);
@@ -199,7 +229,7 @@ test("buildView reports the goal, the counts, and the problems", () => {
     status: "idle",
     entries: [assistant("done", [{ name: "write", args: { path: "results.md" } }]), toolResult("bash", "exit code 2")],
   });
-  assert.match(view, /# Goal, as the human or the supervisor set it\nmake the table/);
+  assert.match(view, /# Goal: make the table/);
   assert.match(view, /status: idle/);
   assert.match(view, /turns: 2/);
   assert.match(view, /results\.md/);

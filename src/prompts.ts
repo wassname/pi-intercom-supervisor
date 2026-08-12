@@ -1,4 +1,13 @@
-/** Text the supervisor session reads. Kept here so the wording is reviewable in one place. */
+/**
+ * Every word the supervisor session reads, in the order it reads them, so this file is the run:
+ *
+ * 1. loadSupervisorPrompt, the policy, read once at /supervise
+ * 2. BRIEF, sent once at pairing, carrying that policy
+ * 3. TOOL_*, the three verdicts, in context at every model call because tools always are
+ * 4. REVIEW_NUDGE, sent with every view, and short because 1 to 3 already said the rest
+ * 5. NO_GOAL and DONE_BLOCKED, refusals, read only when a tool is refused
+ * 6. DEFAULT_SUPERVISOR_PROMPT, the policy used when no SUPERVISOR.md exists
+ */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -24,30 +33,59 @@ export const BRIEF = (policy: string, goal: string, worker: string) =>
 You are now supervising the pi session "${worker}".
 Goal: ${goal || "infer it from the first view you receive"}
 
-Your verdict is a tool call, not text. Call steer, or call done. If the policy above tells you to
-reply with JSON, ignore that part: it belongs to a different supervisor and nothing parses it here.
+Your verdict is a tool call, not text: wait, steer or done. If the policy above tells you to reply
+with JSON, ignore that part: it belongs to a different supervisor and nothing parses it here.
+
+You see the worker twice: when it stops, and on a check in while it is still working. Each view
+carries only what is new since your last look, so read it against what you already know rather
+than expecting the whole session again.
 
 There is no round limit and no budget. Supervision runs until the human stops it. Ending early is
 the failure this exists to prevent, so never stop because it feels like enough.
 
-Do not act yet. The worker's view arrives when it stops. Reply with exactly: watching`;
+Do not act yet. The first view arrives on its own. Reply with exactly: watching`;
 
-export const REVIEW_NUDGE = (view: string, rounds: number, recentSteers: string[]) =>
-  `The worker stopped. Here is its view.
+/**
+ * The three verdicts. These live in the tool descriptions, which the API sends at every model call,
+ * so they are the only instructions here that a supervisor compaction cannot lose.
+ */
+export const TOOL_WAIT =
+  "The worker is on track and needs no instruction. The usual answer at a check in. Costs nothing and reaches nobody.";
+export const TOOL_STEER =
+  "Send one concrete next action to the worker. It arrives as a user message in the worker session, so it interrupts.";
+export const TOOL_DONE =
+  "Declare the goal met and stop supervising. Only call this with quoted evidence from the view.";
+
+/**
+ * Sent with every view, so it is deliberately short.
+ *
+ * What used to be here and is now sent once: the verdict rules (BRIEF, and the tool descriptions,
+ * which survive a compaction) and the instructions already sent (the supervisor's own steer calls
+ * are in its context; the steer tool warns about a repeat when it happens). The goal stays, one
+ * line, inside the view.
+ *
+ * A check in is not a decision point. Interrupting a working agent is expensive and usually wrong,
+ * so the two triggers ask for different things.
+ */
+export const REVIEW_NUDGE = (view: string, rounds: number, stopped: boolean) =>
+  stopped
+    ? `The worker stopped.
 
 ${view}
-${
-    recentSteers.length
-      ? `\nYou already sent these instructions, oldest first. Before you repeat one, name what changed
-in the view that makes it worth another round. If nothing changed, change approach.\n${
-          recentSteers.map((s, i) => `${rounds - recentSteers.length + i + 1}. ${s}`).join("\n")
-        }\n`
-      : ""
-  }
-You have sent ${rounds} instructions. There is no round limit: supervision runs until the human
-stops it. Decide now. Call steer with one concrete next action, or call done if the goal is met. If
-you cannot decide without the human, say so in your reply instead of calling a tool, and say exactly
-what you need. Your reply reaches their phone.`;
+
+${rounds} instructions so far. Decide: steer, done, or wait.`
+    : `Checking in on the worker, which is still going.
+
+${view}
+
+${rounds} instructions so far. Call wait unless this is going somewhere wrong. Interrupting a
+working agent costs it its train of thought, so the bar is real evidence in the view, not a
+tidier plan. Never invent an instruction to have something to say, and never report a fact you
+did not read: a wrong fact is worse than silence.`;
+
+/** Refusal shown when done is called while the worker still has work running. */
+export const DONE_BLOCKED = (what: string) =>
+  `Cannot finish: the worker still has work running (${what}). Wait for the next view.`;
 
 /** Refusal shown when the supervisor tries to steer with no goal set. */
 export const NO_GOAL = `No goal is set, so you must not steer or finish. Inventing a task is worse

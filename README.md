@@ -44,20 +44,30 @@ the broker stamps from its own registry, so a payload cannot forge it. The broke
 authentication, so the trust level is any process running as you, and every session that loads this
 extension sees every message. Do not load it in a session you would not trust with the transcript.
 
-The view body is [pi-vcc](https://github.com/sting8k/pi-vcc)'s `compile()`, the same algorithmic
-compactor (no LLM calls) you can run as your own. The two halves meet at the worker's last
-compaction: the compactor's summary covers everything before it, pi-vcc compiles every message
-after. On top of that the view carries what a compactor has no reason to track: tool calls with no
-result, child pi processes, tool errors, and whether anything changed since the last review.
+Each view carries only the turns since the last one, the way you read the new lines on a screen
+rather than the scrollback. The supervisor is a real session that keeps every view it has read, so
+re-sending the whole transcript would put a second copy of its own context in front of it, and the
+cost would grow with every review. The goal line repeats every time, because that is the reminder
+that stops it drifting onto whatever the worker is doing now. A worker compaction restarts the
+count, and the view says so and carries the summary.
 
-The supervisor looks at a working worker every two minutes, and again whenever the worker stops.
-That is the rate you wander past a second window yourself, and it costs one supervisor turn per
-interval per busy worker. The original also ran two mechanical checks mid-turn, five tool errors in
-a row and five reads of one file with no edit. Those are deleted: with a look every two minutes the
-supervisor sees the same errors in the view and judges them itself, so the checks only bought a
-slightly earlier look. Ported and kept: the process tree check (`src/subagents.ts`, `ps` for child
-pi processes, so a settled worker with a subagent still running is not called finished) and the
-SUPERVISOR.md precedence.
+The view body is [pi-vcc](https://github.com/sting8k/pi-vcc)'s `compile()`, the same algorithmic
+compactor (no LLM calls) you can run as your own. On top of it the view carries what a compactor
+has no reason to track: tool calls with no result, child pi processes, tool errors, and whether
+anything changed since the last review.
+
+The supervisor looks at a working worker every half hour, and again whenever the worker stops.
+Those two looks ask for different things. A stop is a decision point. A check in leans on `wait`,
+because interrupting a working agent costs it its train of thought. The original also ran two
+mechanical checks mid-turn, five tool errors in a row and five reads of one file with no edit.
+Those are deleted: the supervisor sees the same errors in the view and judges them itself. Ported
+and kept: the process tree check (`src/subagents.ts`, `ps` for child pi processes, so a settled
+worker with a subagent still running is not called finished) and the SUPERVISOR.md precedence.
+
+`src/prompts.ts` holds every word the supervisor reads, in the order it reads them. Only the nudge
+and the view repeat per look; the policy, the verdict rules and the goal are sent once. The verdict
+rules live in the tool descriptions, which the API sends at every model call, so a supervisor
+compaction cannot lose them.
 
 The process check is a snapshot where the original polls for two minutes. pi awaits the settle
 handler, so polling there holds the worker's own settle for the whole poll. The loop already does
@@ -71,6 +81,12 @@ the supervisor calls `done` on evidence. Ending early is the failure this exists
 fixed model, scaffolds that keep re-prompting scored 8.7% on MLE-bench against 0.8% for scaffolds
 that let the model stop ([arXiv:2410.07095](https://arxiv.org/abs/2410.07095)). A cap would be a
 competing stopping objective.
+
+There are three verdicts, not two. `wait` was added after watching a real run: with only `steer`
+and `done` on offer, a supervisor with nothing to say wrote "the harness demands a tool call ...
+the least-bad option is a steer that adds something new", ran a command that printed nothing, and
+reported the job was at "turn 47 of 80". The log said 75 of 80. Forcing a verdict at every look is
+what bought that number, so now the usual answer at a check in is to say nothing.
 
 Two guards remain and both prevent a false ending. `steer` is refused while no goal is set, so the
 supervisor asks you or calls `set_goal`, which sends the goal to the worker and heads every later
@@ -95,7 +111,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 56 tests, free apart from a ps call
+npm test                      # 61 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```
