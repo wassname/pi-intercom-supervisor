@@ -37,10 +37,11 @@ one, which is how it invents a fact. `/supervise look` does the same by hand if 
 The repeat matters because `/reload` is how a changed prompt reaches a running session, and the
 full brief goes out only at pairing.
 
-A live pairing puts one line in the footer, `◉ 3 instructions, watching 019ff4eb` in the supervisor
-and `◉ watched by 019ff4eb` in the worker. The notice printed at pairing scrolls away, and after
+A live pairing puts two words in the footer, `👁 watching 3` in the supervisor and `👁 watched` in
+the worker, where 3 is the instruction count. The notice printed at pairing scrolls away, and after
 that a paired session looks like any other prompt, which is how you end up staring at a supervisor
-that stopped supervising an hour ago. Same mechanism as
+that stopped supervising an hour ago. It stays that short because `pi-powerline-footer` appends it
+to its own line for the whole session, unlike a status that shows only during a run. Same mechanism as
 [@diegopetrucci/pi-oracle](https://www.npmjs.com/package/@diegopetrucci/pi-oracle) uses for its
 runs.
 
@@ -112,7 +113,7 @@ gone. A resumed supervisor also has its writing tools taken off again, which the
 handler alone would not do.
 
 The supervisor looks at a working worker every half hour, and again whenever the worker stops.
-Those two looks ask for different things. A stop is a decision point. A check in leans on `wait`,
+Those two looks ask for different things. A stop is a decision point. A check in leans on `let_it_run`,
 because interrupting a working agent costs it its train of thought. The original also ran two
 mechanical checks mid-turn, five tool errors in a row and five reads of one file with no edit.
 Those are deleted: the supervisor sees the same errors in the view and judges them itself. Ported
@@ -137,11 +138,13 @@ fixed model, scaffolds that keep re-prompting scored 8.7% on MLE-bench against 0
 that let the model stop ([arXiv:2410.07095](https://arxiv.org/abs/2410.07095)). A cap would be a
 competing stopping objective.
 
-There are three verdicts, not two. `wait` was added after watching a real run: with only `steer`
-and `done` on offer, a supervisor with nothing to say wrote "the harness demands a tool call ...
-the least-bad option is a steer that adds something new", ran a command that printed nothing, and
-reported the job was at "turn 47 of 80". The log said 75 of 80. Forcing a verdict at every look is
-what bought that number, so now the usual answer at a check in is to say nothing.
+There are three verdicts, not two. `let_it_run` was added after watching a real run: with only
+`steer` and `done` on offer, a supervisor with nothing to say wrote "the harness demands a tool
+call ... the least-bad option is a steer that adds something new", ran a command that printed
+nothing, and reported the job was at "turn 47 of 80". The log said 75 of 80. Forcing a verdict at
+every look is what bought that number, so now the usual answer at a check in is to say nothing.
+It was called `wait` until wassname read one and could not tell whether the supervisor had chosen
+to wait or the harness was waiting on something.
 
 Two guards remain and both prevent a false ending. `steer` is refused while no goal is set, so the
 supervisor asks you or calls `set_goal`, which sends the goal to the worker and heads every later

@@ -388,7 +388,7 @@ test("a check in and a worker that stopped ask for different things", async () =
   sup.userMessages.length = 0;
   sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal: g\n", stopped: false });
   await new Promise((r) => setTimeout(r, 5));
-  assert.match(sup.userMessages.at(-1)!.content, /Call wait unless this is going somewhere wrong/);
+  assert.match(sup.userMessages.at(-1)!.content, /Call let_it_run unless this is going somewhere wrong/);
 
   sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal: g\n", stopped: true });
   await new Promise((r) => setTimeout(r, 5));
@@ -459,7 +459,7 @@ test("/supervise look asks the worker for a fresh view, rather than the supervis
   assert.equal(view.stopped, false, "asked for, so it is a check in and not a decision point");
 });
 
-test("waiting says the turn is over, so wait is not called four times running", async () => {
+test("let_it_run says the turn is over, so it is not called four times running", async () => {
   // Observed 2026-08-12 in session 019ff458-4578: wait at 06:21:52, 06:22:13, 06:22:25 and
   // 06:22:32, then "I keep calling wait in a loop ... I should end my turn now". A tool result
   // reads as a prompt to act again, so the result has to say the turn is finished.
@@ -467,7 +467,7 @@ test("waiting says the turn is over, so wait is not called four times running", 
   await sup.start();
   await sup.run("supervise", "worker make the results table");
 
-  const result = await sup.tools.get("wait")!.execute("id", { reason: "job 291 is at 305 of 600" }, undefined, undefined, sup.ctx);
+  const result = await sup.tools.get("let_it_run")!.execute("id", { reason: "job 291 is at 305 of 600" }, undefined, undefined, sup.ctx);
   assert.match(result.content[0].text, /job 291 is at 305 of 600/, "the reason is still recorded");
   assert.match(result.content[0].text, /turn is over/);
 });
@@ -503,7 +503,7 @@ test("a resume onto a live worker keeps supervising, and takes the writers back 
   assert.match(anchor, /Supervising again/);
   assert.match(anchor, /Goal: g/);
   assert.match(anchor, /3 instructions so far/);
-  assert.match(anchor, /one tool call: steer, done or wait/);
+  assert.match(anchor, /one tool call: steer, done or let_it_run/);
   // The strip lives in the /supervise handler, which a resume never runs. Without this the
   // supervisor comes back with bash and edit in a directory the worker is writing to.
   const back = resumed.pi.getActiveTools();
@@ -717,7 +717,7 @@ test("supervising takes the writing tools away, and stopping gives them back", a
   const during = sup.pi.getActiveTools();
   assert.deepEqual(
     during,
-    ["read", "grep", "list", "worker_view", "set_goal", "steer", "wait", "done"],
+    ["read", "grep", "list", "worker_view", "set_goal", "steer", "let_it_run", "done"],
     "no bash, no edit, no write, and the supervisor tools appear",
   );
   await sup.run("supervise", "stop");
@@ -747,9 +747,15 @@ test("the footer says which side of a pairing this session is, and clears when i
   assert.equal(sup.status.get("intercom-supervisor"), undefined, "nothing to say when unpaired");
 
   await sup.run("supervise", "make the table");
-  assert.match(sup.status.get("intercom-supervisor")!, /0 instructions, watching session-/);
+  assert.match(sup.status.get("intercom-supervisor")!, /watching 0/);
   await sup.tools.get("steer")!.execute("id", { message: "run the suite" }, undefined, undefined, sup.ctx);
-  assert.match(sup.status.get("intercom-supervisor")!, /1 instructions, watching/);
+  assert.match(sup.status.get("intercom-supervisor")!, /watching 1/);
+
+  // A status set during session_start is lost, because the footer has not mounted yet. Observed
+  // 2026-08-12: a resumed supervisor showed nothing in wassname's footer. So set it every turn.
+  sup.status.clear();
+  await sup.turnStart();
+  assert.match(sup.status.get("intercom-supervisor")!, /watching 1/, "and again each turn");
 
   await sup.run("supervise", "stop");
   assert.equal(sup.status.get("intercom-supervisor"), undefined);
@@ -758,7 +764,7 @@ test("the footer says which side of a pairing this session is, and clears when i
   await worker.start();
   worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
   await new Promise((r) => setTimeout(r, 5));
-  assert.match(worker.status.get("intercom-supervisor")!, /watched by session-/, "the worker says so too");
+  assert.match(worker.status.get("intercom-supervisor")!, /watched/, "the worker says so too");
 });
 
 test("a session that is not supervising never sees the supervisor tools", async () => {
@@ -768,7 +774,7 @@ test("a session that is not supervising never sees the supervisor tools", async 
   const worker = harness(WORKER_ID, { entries: [message("user", "do the thing")] });
   await worker.start();
   assert.deepEqual(
-    worker.pi.getActiveTools().filter((t: string) => ["worker_view", "set_goal", "steer", "wait", "done"].includes(t)),
+    worker.pi.getActiveTools().filter((t: string) => ["worker_view", "set_goal", "steer", "let_it_run", "done"].includes(t)),
     [],
     "an unpaired session is not offered any of them",
   );
@@ -831,7 +837,7 @@ test("the supervisor gets a look at a working worker every half hour, without be
   const views = worker.published.filter((p) => p.t === "view");
   assert.equal(views.length, 1, "past half an hour the supervisor gets a look");
   assert.equal(views[0].stopped, false, "a mid-turn look is a check in, not a decision point");
-  assert.match(views[0].view, /status: working, \d+s into this turn/);
+  assert.match(views[0].view, /status: working, routine check in, \d+s into this turn/);
   // A look that forgets the subagent line reports "none" and unblocks done while one is running.
   assert.match(views[0].view, /^child pi processes still running: /m);
 

@@ -41,8 +41,8 @@ import {
   REVIEW_NUDGE,
   TOOL_DONE,
   TOOL_STEER,
-  TOOL_WAIT,
-  WAIT_ACK,
+  TOOL_LET_IT_RUN,
+  LET_IT_RUN_ACK,
   loadSupervisorPrompt,
 } from "./prompts.ts";
 
@@ -56,9 +56,16 @@ function workerModel(info: { model: string; contextPct?: number }): string {
   return info.contextPct === undefined ? info.model : `${info.model}, ${info.contextPct}% of its context used`;
 }
 
-/** Footer line id, and its marker. One glyph, because the footer is the tightest space pi has. */
+/**
+ * The footer line, kept to two words plus a glyph.
+ *
+ * pi-powerline-footer appends extension statuses to the end of its own line, so this costs footer
+ * width for the whole session. The oracle's status can afford to be long because it shows only
+ * while a run is going. The paired session id is left out: it helps only with three sessions open,
+ * and you already know which terminal you are looking at.
+ */
 const STATUS_ID = "intercom-supervisor";
-const EYE = "◉";
+const EYE = "\u{1F441}";
 
 /** How long the supervisor waits for the worker to acknowledge a pair before giving up on it. */
 const PAIR_ACK_TIMEOUT_MS = 10_000;
@@ -94,12 +101,12 @@ const WRITER_TOOLS = new Set([
  * The tools only a supervisor should have. Hidden in every session that is not supervising.
  *
  * Both sessions load this extension and registration happens at load, so without this a plain
- * worker is offered worker_view, steer, wait and done. Observed 2026-08-12: a worker given an
+ * worker is offered worker_view, steer, let_it_run and done. Observed 2026-08-12: a worker given an
  * ordinary coding task spent twelve turns reasoning "these are supervisor tools ... so I might be
  * the supervisor for a worker session", called worker_view, and read "the worker has not stopped
  * since pairing" as proof of a pairing it never had.
  */
-const SUPERVISOR_TOOLS = ["worker_view", "set_goal", "steer", "wait", "done"];
+const SUPERVISOR_TOOLS = ["worker_view", "set_goal", "steer", "let_it_run", "done"];
 
 export default function (pi: any) {
   let channel: IntercomExtensionChannel | undefined;
@@ -144,10 +151,7 @@ export default function (pi: any) {
       ctx.ui.setStatus(STATUS_ID, undefined);
       return;
     }
-    const who = state.pairedId.slice(0, 8);
-    const text = state.role === "supervisor"
-      ? `${state.steerRounds} instructions, watching ${who}`
-      : `watched by ${who}`;
+    const text = state.role === "supervisor" ? `watching ${state.steerRounds}` : "watched";
     ctx.ui.setStatus(STATUS_ID, ctx.ui.theme.fg("accent", `${EYE} `) + ctx.ui.theme.fg("dim", text));
   }
 
@@ -313,7 +317,7 @@ export default function (pi: any) {
       // Only the worker can make a view, so a supervisor that lost its place has to ask. It loses
       // its place whenever its own turn ends without one: a crash, a credit failure, a /reload.
       // Its answer to a stale context is to invent, so give it real data instead.
-      await publishMidRun(ctx, "you asked");
+      await publishMidRun(ctx, "sent because you asked for a view");
       return;
     }
 
@@ -400,10 +404,13 @@ export default function (pi: any) {
    */
   pi.on("turn_start", async (_event: unknown, context: any) => {
     ctx = context;
+    // Set again, and before the role check, because a status set during session_start does not
+    // survive: the footer had not mounted yet, and nothing redraws it until the next save().
+    showStatus();
     if (state.role !== "worker" || !channel || watchTimer) return;
     watchTimer = setInterval(() => {
       if (Date.now() - lastLook < WATCH_INTERVAL_MS) return;
-      publishMidRun(ctx, `${Math.round((Date.now() - turnStartedAt) / 1000)}s into this turn`).catch((err: Error) => {
+      publishMidRun(ctx, `routine check in, ${Math.round((Date.now() - turnStartedAt) / 1000)}s into this turn`).catch((err: Error) => {
         debug("timer look failed", { error: err.message });
       });
     }, WATCH_POLL_MS);
@@ -413,6 +420,7 @@ export default function (pi: any) {
   /** Fires only when no retry, compaction, or queued continuation will run, so the worker is truly done. */
   pi.on("agent_settled", async (_event: unknown, context: any) => {
     ctx = context;
+    showStatus();
     debug("agent_settled", { role: state.role, hasChannel: Boolean(channel) });
     if (state.role !== "worker" || !channel) return;
     clearInterval(watchTimer); // the worker stopped, so there is nothing to watch until it starts again
@@ -621,15 +629,15 @@ Tell them in your reply, quoting it, so they can correct it.`,
    * said 75 of 80. Forcing a verdict every look is what bought that number.
    */
   pi.registerTool({
-    name: "wait",
-    label: "Wait, nothing to change",
-    description: TOOL_WAIT,
+    name: "let_it_run",
+    label: "Let the worker run",
+    description: TOOL_LET_IT_RUN,
     parameters: Type.Object({ reason: Type.String({ description: "What in the view says it is on track, in one line." }) }),
     execute: async (_id: string, params: { reason: string }) => {
       if (state.role !== "supervisor") {
         return { content: [{ type: "text", text: "Not supervising." }], isError: true };
       }
-      return { content: [{ type: "text", text: WAIT_ACK(params.reason) }] };
+      return { content: [{ type: "text", text: LET_IT_RUN_ACK(params.reason) }] };
     },
   });
 

@@ -40,7 +40,7 @@ export const BRIEF = (policy: string, goal: string, worker: string) =>
 You are now supervising the pi session "${worker}".
 Goal: ${goal || "infer it from the first view you receive"}
 
-Your verdict is a tool call, not text: wait, steer or done. If the policy above tells you to reply
+Your verdict is a tool call, not text: let_it_run, steer or done. If the policy above tells you to reply
 with JSON, ignore that part: it belongs to a different supervisor and nothing parses it here.
 
 You see the worker twice: when it stops, and on a check in while it is still working. Each view
@@ -54,7 +54,7 @@ to write down what matters before it loses the detail.
 There is no round limit and no budget. Supervision runs until the human stops it. Ending early is
 the failure this exists to prevent, so never stop because it feels like enough.
 
-Do not act yet. The first view arrives on its own. Answer this message by calling the wait tool,
+Do not act yet. The first view arrives on its own. Answer this message by calling let_it_run,
 with the reason "paired, waiting for the first view". Make the first answer a tool call, because
 every answer after it is a tool call too.`;
 
@@ -71,23 +71,24 @@ export const REANCHOR = (goal: string, rounds: number) =>
 Goal: ${goal || "not set"}
 ${rounds} instructions so far.
 
-A view of the worker follows. Answer it with one tool call: steer, done or wait. The word on its
+A view of the worker follows. Answer it with one tool call: steer, done or let_it_run. The word on its
 own does nothing; only the call reaches the worker.`;
 
 /**
  * The three verdicts. These live in the tool descriptions, which the API sends at every model call,
  * so they are the only instructions here that a supervisor compaction cannot lose.
  */
-export const TOOL_WAIT =
+export const TOOL_LET_IT_RUN =
   "The worker is on track and needs no instruction. The usual answer at a check in. Costs nothing and reaches nobody."
   + " Call it once and then stop. The next view wakes you by itself.";
 
 /**
- * Observed 2026-08-12: a supervisor called wait four times in a row, then wrote "I keep calling
+ * Observed 2026-08-12: a supervisor called this four times in a row, then wrote "I keep calling
  * wait in a loop ... I should end my turn now". A tool result reads as a prompt to act again, so
  * the result says the turn is over rather than leaving the model to work that out.
  */
-export const WAIT_ACK = (reason: string) => `Waiting: ${reason}\n\nRecorded. Your turn is over. Say nothing more until the next view arrives.`;
+export const LET_IT_RUN_ACK = (reason: string) =>
+  `Letting it run: ${reason}\n\nRecorded. Your turn is over. Say nothing more until the next view arrives.`;
 export const TOOL_STEER =
   "Send one concrete next action to the worker. It arrives as a user message in the worker session, so it interrupts.";
 export const TOOL_DONE =
@@ -110,13 +111,13 @@ export const REVIEW_NUDGE = (view: string, rounds: number, stopped: boolean) =>
 
 ${view}
 
-${rounds} instructions so far. Answer with one tool call: steer, done or wait. The word on its own
+${rounds} instructions so far. Answer with one tool call: steer, done or let_it_run. The word on its own
 does nothing; only the call reaches the worker.`
     : `Checking in on the worker, which is still going.
 
 ${view}
 
-${rounds} instructions so far. Call wait unless this is going somewhere wrong. Interrupting a
+${rounds} instructions so far. Call let_it_run unless this is going somewhere wrong. Interrupting a
 working agent costs it its train of thought, so the bar is real evidence in the view, not a
 tidier plan. Never invent an instruction to have something to say, and never report a fact you
 did not read: a wrong fact is worse than silence.`;
