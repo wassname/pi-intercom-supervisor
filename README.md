@@ -71,11 +71,16 @@ compactor (no LLM calls) you can run as your own. On top of it the view carries 
 has no reason to track: tool calls with no result, child pi processes, tool errors, and whether
 anything changed since the last review.
 
-It also carries the worker's last three reasoning blocks, which pi-vcc drops and which you see on
-screen when you watch a session. A worker going in circles says so there first, while it names
-the approach it is about to retry, before any file or commit changes. Three rather than one,
-because one shows the newest try and three show a repeat. Each is cut to its last 500
-characters, since a reasoning block ends on what it decided to do.
+pi-vcc drops the worker's reasoning, which you do see on screen, so this keeps the last two blocks
+by rewriting them as text before compiling. They stay where they happened, next to the tool call
+each one produced, because that is the order you read a session in. A worker going in circles says
+so there first, while it names the approach it is about to retry, before any file or commit
+changes. Two, cut to the last 400 characters each: one worker session here held 161 reasoning
+blocks, and all of them would make the view a second transcript.
+
+The goal is never cut. Cutting it at 300 characters ended a real goal mid-word, and a supervisor
+cannot judge against half a sentence. The byte limit trims the transcript instead, which is the
+part that repeats.
 
 Resume and `/reload` both restore the goal and the round count out of the transcript, which is
 where they belong. The paired session ID is not restored that way, because it addresses a live
