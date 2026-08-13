@@ -196,6 +196,20 @@ export default function (pi: any) {
   }
 
   /**
+   * Put words in the supervisor's own context without starting a turn.
+   *
+   * The brief, the reanchor and a goal change all say "a view follows", and the view is the thing
+   * to judge. A user message always starts a turn (pi types.d.ts:754), so the supervisor answered
+   * these with a verdict before any view existed: twice on 2026-08-13, and 98 times an hour before
+   * that. No wording stops it, because the turn should not be there at all. A custom message with
+   * triggerTurn false joins the context and waits for the view to wake it (agent-session.d.ts:343).
+   * display true keeps it on screen, where a user message used to be. - CLAUDE
+   */
+  function tellSupervisor(text: string) {
+    pi.sendMessage({ customType: "supervisor_brief", content: text, display: true }, { triggerTurn: false });
+  }
+
+  /**
    * Ask every session whether it can be supervised, and collect the ones that say yes.
    *
    * The broker roster is not the candidate list. It carries child runs from pi-subagents, sessions
@@ -299,7 +313,7 @@ export default function (pi: any) {
     // Say the goal and the answer shape again. A /reload is how a changed prompt reaches a running
     // session, and the brief goes out only at pairing, so without this a wording fix needs a fresh
     // pairing and loses the supervisor's memory of its own steers.
-    pi.sendUserMessage(REANCHOR(state.goal, state.steerRounds));
+    tellSupervisor(REANCHOR(state.goal, state.steerRounds));
     // Ask for a view rather than wait for one. A supervisor that came back from a crash, a credit
     // failure or a /reload holds a stale picture, and answering from a stale picture is how it
     // invents a fact. Only the worker makes views, so it has to ask, and nobody should have to
@@ -584,7 +598,7 @@ export default function (pi: any) {
         send({ t: "goal", to: state.pairedId, goal }); // the worker heads every view with it
         // Tell the supervisor now, and ask for a view, so it judges the new goal at once instead of
         // waiting up to half an hour for the next look.
-        pi.sendUserMessage(GOAL_CHANGED(goal), ctx?.isIdle() ? undefined : { deliverAs: "followUp" });
+        tellSupervisor(GOAL_CHANGED(goal));
         send({ t: "look", to: state.pairedId });
         context.ui?.notify?.(`goal changed: ${goal}`, "info");
         return;
@@ -673,7 +687,7 @@ export default function (pi: any) {
       showSupervisorTools(true);
 
       const { prompt, source } = loadSupervisorPrompt(context.cwd);
-      pi.sendUserMessage(BRIEF(prompt, goal, target));
+      tellSupervisor(BRIEF(prompt, goal, target));
       context.ui?.notify?.(`supervising ${target} (policy: ${source}, tools: ${kept.join(", ")})`, "info");
     },
   });

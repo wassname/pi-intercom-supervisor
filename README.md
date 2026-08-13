@@ -148,6 +148,13 @@ nothing to read, and a supervisor with nothing to read still answers: on 2026-08
 first view". A worker paired while it sits at the prompt never settles, so waiting for the first
 stop can mean waiting for ever.
 
+Only the view starts a supervisor turn. The brief, the reanchor after a reload and a goal change
+all say "a view follows", so none of them is a thing to judge, and each goes in as a custom message
+with `triggerTurn: false` (`pi-coding-agent/core/agent-session.d.ts:343`). They are in the context
+and they start nothing. As a user message the brief was a turn, and a supervisor holding three
+verdict tools with no view in front of it answered it: 98 times in the worst case, and twice more
+after the brief was reworded to ask for no answer at all. The turn should not have existed.
+
 A second verdict in one answer is cut off with pi's own `ctx.abort()`. The tool result already
 said "your turn is over" and that is what those 98 calls ignored; words in a tool result cannot
 stop a loop, because the loop is what reads them. The result is still recorded, since the agent
@@ -213,7 +220,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 83 tests, free apart from a ps call
+npm test                      # 84 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```

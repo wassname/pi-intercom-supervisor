@@ -41,6 +41,7 @@ function harness(
   const tools = new Map<string, any>();
   const appended: Array<{ type: string; data: any }> = [];
   const userMessages: Array<{ content: string; options?: any }> = [];
+  const contextMessages: Array<{ content: string; options?: any }> = [];
   const published: any[] = [];
   const notices: string[] = [];
   const selects: Array<{ title: string; options: string[] }> = [];
@@ -100,6 +101,9 @@ function harness(
     },
     appendEntry: (type: string, data: any) => appended.push({ type, data }),
     sendUserMessage: (content: string, options?: any) => userMessages.push({ content, options }),
+    // pi's own sendMessage: a CustomMessageEntry, in the LLM context, and with triggerTurn false it
+    // starts no turn (session-manager.d.ts:85, agent-session.d.ts:343).
+    sendMessage: (message: any, options?: any) => contextMessages.push({ content: message.content, options }),
     // On the pi API, NOT on the command context. Putting them on the context here is what hid a
     // real bug: the live command handler threw "context.getActiveTools is not a function", and
     // before that the optional call returned undefined and the strip skipped in silence.
@@ -142,6 +146,7 @@ function harness(
     tools,
     appended,
     userMessages,
+    contextMessages,
     published,
     notices,
     selects,
@@ -608,7 +613,7 @@ test("a resume onto a live worker keeps supervising, and takes the writers back 
   assert.deepEqual(resumed.published.filter((p) => p.t === "look"), [{ t: "look", to: WORKER_ID }]);
   // And the goal and the answer shape are said again, so a /reload is how a changed prompt lands.
   // Without it, fixing the wording needs a fresh pairing, which loses the count of steers.
-  const anchor = resumed.userMessages.at(-1)!.content;
+  const anchor = resumed.contextMessages.at(-1)!.content;
   assert.match(anchor, /Supervising again/);
   assert.match(anchor, /<goal>\ng\n<\/goal>/);
   assert.match(anchor, /3 instructions so far/);
@@ -961,6 +966,26 @@ test("a goal with spaces needs no target, and @name takes the rest of the line a
   });
 });
 
+test("the brief starts no turn, so there is no answer before the first view", async () => {
+  // The whole loop: a user message is a turn, and a supervisor holding verdict tools with no view
+  // to read still answers. It called let_it_run 98 times on 2026-08-13, and twice more after the
+  // brief asked it not to. The brief is context now, and the view is what wakes it.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "@worker make the results table");
+
+  assert.deepEqual(sup.userMessages, [], "nothing may start a supervisor turn before a view");
+  const brief = sup.contextMessages.at(-1)!;
+  assert.match(brief.content, /You are now supervising the pi session "worker"/);
+  assert.deepEqual(brief.options, { triggerTurn: false });
+
+  // And the view is a user message, because that one is meant to be answered.
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "worker view", stopped: true });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(sup.userMessages.length, 1);
+  assert.match(sup.userMessages[0].content, /worker view/);
+});
+
 test("/supervise goal changes the goal without breaking the pairing", async () => {
   // The only other way is /supervise stop and a fresh pairing, which throws away the steer count.
   const sup = harness(SUPER_ID);
@@ -974,7 +999,7 @@ test("/supervise goal changes the goal without breaking the pairing", async () =
     { t: "goal", to: WORKER_ID, goal: "quote the evidence file instead" },
   ], "the worker holds the copy every view header is built from");
   assert.ok(sup.published.some((p) => p.t === "look"), "and a fresh view follows, so it judges now");
-  assert.match(sup.userMessages.at(-1)!.content, /changed the goal[\s\S]*quote the evidence file instead/);
+  assert.match(sup.contextMessages.at(-1)!.content, /changed the goal[\s\S]*quote the evidence file instead/);
   assert.match(sup.status.get("intercom-supervisor")!, /watching 1/, "the steer count survives");
 });
 
