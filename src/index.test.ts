@@ -547,37 +547,50 @@ test("let_it_run says the turn is over, so it is not called four times running",
 
   const result = await sup.tools.get("let_it_run")!.execute("id", { reason: "job 291 is at 305 of 600" }, undefined, undefined, sup.ctx);
   assert.match(result.content[0].text, /job 291 is at 305 of 600/, "the reason is still recorded");
-  assert.match(result.content[0].text, /turn is over/);
+  assert.match(result.content[0].text, /This look is finished/);
+  // The result must name a way to end the turn. "Say nothing more" named none, and a model that
+  // may not write text can only call another tool, which is what session 019ffa73 did every look.
+  assert.match(result.content[0].text, /write one short line, or nothing at all/);
+  assert.doesNotMatch(result.content[0].text, /Say nothing more/);
 });
 
-test("a second verdict in one answer is cut off, because saying so is not enough", async () => {
-  // Session 019ffa5f, 2026-08-13: 98 let_it_run calls in one turn, one every 2 seconds, each one
-  // answered "Recorded. Your turn is over." and each one ignored. Words in a tool result cannot
-  // stop a loop, because the loop is what reads them.
+test("a sign-off verdict is answered, not aborted, and a runaway is still cut", async () => {
+  // Session 019ffa73, 2026-08-13, all fifteen looks: let_it_run "job 23 progressing normally
+  // (438/600 steps)", then let_it_run "waiting for job 23 to reach Evidence-b", then an empty
+  // assistant message with errorMessage "This operation was aborted". Both reasons were true, so
+  // the second call was the model signing off and the abort made a normal look look like a fault.
+  // Session 019ffa5f is the case the cut is still for: 645 calls.
   const sup = harness(SUPER_ID);
   await sup.start();
   await sup.run("supervise", "@worker make the results table");
   await sup.agentStart();
 
   const letItRun = sup.tools.get("let_it_run")!;
-  await letItRun.execute("id", { reason: "on track" }, undefined, undefined, sup.ctx);
-  assert.equal(sup.aborts.length, 0, "one verdict is the shape, and abort() prints an error line");
-  await letItRun.execute("id", { reason: "still on track" }, undefined, undefined, sup.ctx);
-  assert.equal(sup.aborts.length, 1, "the second is the loop starting, so it is cut");
-  await letItRun.execute("id", { reason: "and again" }, undefined, undefined, sup.ctx);
-  assert.equal(sup.aborts.length, 2, "and it stays cut until the next view");
+  const first = await letItRun.execute("id", { reason: "job 23 at 438 of 600" }, undefined, undefined, sup.ctx);
+  assert.match(first.content[0].text, /job 23 at 438 of 600/);
 
-  // The next view is a new answer, and it gets a clean verdict of its own.
+  const again = await letItRun.execute("id", { reason: "waiting for Evidence-b" }, undefined, undefined, sup.ctx);
+  assert.equal(sup.aborts.length, 0, "a sign-off must not end the look in an error line");
+  assert.match(again.content[0].text, /Already recorded for this view/);
+  assert.equal(again.isError, undefined, "a repeat did nothing, and doing nothing is not an error");
+
+  // A runaway is a count no sign-off explains.
+  for (const _ of [3, 4, 5]) await letItRun.execute("id", { reason: "and again" }, undefined, undefined, sup.ctx);
+  assert.equal(sup.aborts.length, 0, "five is still within reach of an ordinary answer");
+  await letItRun.execute("id", { reason: "and again" }, undefined, undefined, sup.ctx);
+  assert.equal(sup.aborts.length, 1, "the sixth is a loop, so it is cut");
+
+  // The next view is a new look, and it gets a clean verdict of its own.
   await sup.agentStart();
   await sup.tools.get("steer")!.execute("id", { message: "read the log" }, undefined, undefined, sup.ctx);
-  assert.equal(sup.aborts.length, 2, "the count is per answer, not per pairing");
+  assert.equal(sup.aborts.length, 1, "the count is per look, not per pairing");
 });
 
-test("a view that arrives mid-answer buys its own verdict, so the second look is not cut", async () => {
-  // 2026-08-13, live: two let_it_run calls, both quoting real worker state ("waiting for job 24
-  // Evidence-b"), and the second answered "This operation was aborted". A view sent while the
-  // supervisor is busy is queued as a followUp, and a followUp runs inside the agent loop that is
-  // already going, so agent_start never fires a second time and the count carried over.
+test("a view that arrives mid-answer starts a fresh look", async () => {
+  // A view sent while the supervisor is busy is queued as a followUp, and a followUp runs inside
+  // the agent loop already going, so agent_start does not fire again. Counting per agent run would
+  // charge the second view for the first, and answer it "already recorded" for a view it has not
+  // seen. The view branch resets the count, so the new view gets a verdict of its own.
   const sup = harness(SUPER_ID);
   await sup.start();
   await sup.run("supervise", "@worker make the results table");
@@ -585,17 +598,14 @@ test("a view that arrives mid-answer buys its own verdict, so the second look is
 
   const letItRun = sup.tools.get("let_it_run")!;
   await letItRun.execute("id", { reason: "no new turns since the last look" }, undefined, undefined, sup.ctx);
-  assert.equal(sup.aborts.length, 0);
 
   // Half an hour later, still the same agent loop.
   sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "job 24 Evidence-b queued", stopped: false });
   await new Promise((r) => setTimeout(r, 5));
-  await letItRun.execute("id", { reason: "waiting for job 24 Evidence-b to land" }, undefined, undefined, sup.ctx);
-  assert.equal(sup.aborts.length, 0, "a second view is a second look, and each look gets one verdict");
-
-  // The loop guard still bites within one look.
-  await letItRun.execute("id", { reason: "and again" }, undefined, undefined, sup.ctx);
-  assert.equal(sup.aborts.length, 1);
+  const fresh = await letItRun.execute("id", { reason: "waiting for job 24 Evidence-b to land" }, undefined, undefined, sup.ctx);
+  assert.match(fresh.content[0].text, /waiting for job 24 Evidence-b to land/, "a new view, so a full verdict");
+  assert.doesNotMatch(fresh.content[0].text, /Already recorded/);
+  assert.equal(sup.aborts.length, 0);
 });
 
 test("a tool a worker cannot use never aborts its turn", async () => {

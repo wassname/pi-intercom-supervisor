@@ -155,16 +155,21 @@ and they start nothing. As a user message the brief was a turn, and a supervisor
 verdict tools with no view in front of it answered it: 98 times in the worst case, and twice more
 after the brief was reworded to ask for no answer at all. The turn should not have existed.
 
-A second verdict in one answer is cut off with pi's own `ctx.abort()`. The tool result already
-said "your turn is over" and that is what those 98 calls ignored; words in a tool result cannot
-stop a loop, because the loop is what reads them. The result is still recorded, since the agent
-loop pushes tool results before it streams the next assistant message
-(`pi-agent-core/agent-loop.js:115-119`). The first verdict is left alone, because `abort()` prints
-`This operation was aborted` in the terminal and the ordinary one-verdict answer should not look
-like a fault. "One answer" means one look, and the count resets when a view arrives as well as on
-`agent_start`. A view that lands while the supervisor is busy is queued as a follow up, and a
-follow up runs inside the agent loop that is already going, so `agent_start` does not fire again.
-Resetting on that event alone charged the second honest verdict of the night for the first.
+A `let_it_run` result has to name a way to end the turn. It used to end "Say nothing more until the
+next view arrives", which is the one thing a model cannot do: a turn ends when the assistant writes
+text and calls no tool, so forbidding text left only another tool call. Session 019ffa73 shows the
+result on all fifteen looks, a true reason ("job 23 progressing normally, 438/600 steps"), then a
+second true reason two seconds later ("waiting for job 23 to reach Evidence-b"). A second call in
+one look is now answered, saying the verdict is already recorded and naming the way out. It is not
+an error, because nothing happened: `let_it_run` reaches nobody.
+
+A runaway is still cut with pi's own `ctx.abort()`, past five verdicts in one look, which no
+sign-off explains and session 019ffa5f reached 645 of. Words in a tool result cannot stop a loop,
+because the loop is what reads them. The result is still recorded, since the agent loop pushes tool
+results before it streams the next assistant message (`pi-agent-core/agent-loop.js:115-119`). "One
+look" means one view: the count resets when a view arrives as well as on `agent_start`, because a
+view that lands while the supervisor is busy is queued as a follow up, and a follow up runs inside
+the agent loop already going, so `agent_start` does not fire again.
 
 A stop and a check in ask for different things. A stop is a decision point. A check in leans on `let_it_run`,
 because interrupting a working agent costs it its train of thought. The original also ran two

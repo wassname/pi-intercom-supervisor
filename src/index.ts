@@ -46,6 +46,7 @@ import {
   TOOL_STEER,
   TOOL_LET_IT_RUN,
   LET_IT_RUN_ACK,
+  LET_IT_RUN_AGAIN,
   loadSupervisorPrompt,
 } from "./prompts.ts";
 
@@ -698,22 +699,23 @@ export default function (pi: any) {
   });
 
   /**
-   * One verdict per view, cut off at the second.
+   * How many verdicts this look has had, and the cut for a real runaway.
    *
-   * The tool result says the turn is over and the model does not always believe it: on 2026-08-13
-   * a supervisor called let_it_run 98 times in one turn, one call every 2 seconds. A tool result
-   * is what the loop feeds back to the model, so no wording in it can stop the loop. abort() can,
-   * and the result is still recorded, because the loop pushes results and only then streams the
-   * next assistant message (pi-agent-core agent-loop.js:115-119).
+   * Session 019ffa73, every look: let_it_run with a true reason, then a second let_it_run with a
+   * different true reason, then "This operation was aborted". Fifteen looks, fifteen aborts. The
+   * second call is the model signing off, not a loop, and cutting it made an ordinary look end in
+   * an error line. So a repeat is answered instead (LET_IT_RUN_AGAIN), and abort() waits for a
+   * count no sign-off explains. Session 019ffa5f reached 645 calls, so the cut stays.
    *
-   * The first verdict is left alone. abort() prints "This operation was aborted" in the terminal,
-   * and the ordinary one-verdict turn should not look like a fault. So the count must reset on
-   * every look, or an honest second look pays for the first: see the two reset sites. - CLAUDE
+   * Only let_it_run reaches nobody, so only it is safe to answer twice. steer and done act every
+   * time they are called, and the repeat warning in steer is what covers a duplicate there.
    */
+  const RUNAWAY_VERDICTS = 5;
   let verdictsThisLook = 0;
   const endLook = (context: any) => {
     verdictsThisLook += 1;
-    if (verdictsThisLook > 1) context.abort();
+    if (verdictsThisLook > RUNAWAY_VERDICTS) context.abort();
+    return verdictsThisLook === 1;
   };
 
   pi.registerTool({
@@ -819,8 +821,8 @@ Tell them in your reply, quoting it, so they can correct it.`,
       if (state.role !== "supervisor") {
         return { content: [{ type: "text", text: "Not supervising." }], isError: true };
       }
-      endLook(context);
-      return { content: [{ type: "text", text: LET_IT_RUN_ACK(params.reason) }] };
+      const first = endLook(context);
+      return { content: [{ type: "text", text: first ? LET_IT_RUN_ACK(params.reason) : LET_IT_RUN_AGAIN }] };
     },
   });
 

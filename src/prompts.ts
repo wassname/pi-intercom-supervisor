@@ -105,12 +105,21 @@ export const TOOL_LET_IT_RUN =
   + " Call it once and then stop. The next view wakes you by itself.";
 
 /**
- * Observed 2026-08-12: a supervisor called this four times in a row, then wrote "I keep calling
- * wait in a loop ... I should end my turn now". A tool result reads as a prompt to act again, so
- * the result says the turn is over rather than leaving the model to work that out.
+ * A tool result reads as a prompt to act again, so it has to say the look is finished.
+ *
+ * It used to end "Say nothing more until the next view arrives", and that is the one thing a model
+ * cannot do. A turn ends when the assistant writes text and calls no tool, so forbidding text left
+ * only another tool call. Session 019ffa73, every one of fifteen looks: a true reason, then a
+ * second true reason two seconds later, then the abort. It now names the way out instead.
  */
 export const LET_IT_RUN_ACK = (reason: string) =>
-  `Letting it run: ${reason}\n\nRecorded. Your turn is over. Say nothing more until the next view arrives.`;
+  `Letting it run: ${reason}\n\nRecorded, and the worker was not touched. This look is finished. End your turn now:
+write one short line, or nothing at all, and call no further tool. The next view wakes you.`;
+
+/** The answer to a second let_it_run in one look. Costs a round trip and no error line. */
+export const LET_IT_RUN_AGAIN =
+  `Already recorded for this view, so this call did nothing. One verdict is all a look needs.
+End your turn now: write one short line, or nothing at all, and call no further tool.`;
 export const TOOL_STEER =
   "Send one concrete next action to the worker. It arrives as a user message in the worker session, so it interrupts.";
 export const TOOL_DONE =
