@@ -342,6 +342,11 @@ export default function (pi: any) {
       save();
       send({ t: "paired", to: from });
       ctx?.ui?.notify?.(`supervised by ${from.slice(0, 8)}: ${wire.goal}`, "info");
+      // A first view goes with the acknowledgement. Without it the supervisor's opening turn has
+      // nothing to read, and it answers anyway: on 2026-08-13 it called let_it_run 98 times over
+      // "waiting for the first view". A worker paired while idle never settles, so waiting for
+      // agent_settled can mean waiting for ever.
+      await publishView(ctx, "sent at pairing");
       return;
     }
 
@@ -366,7 +371,9 @@ export default function (pi: any) {
       // Only the worker can make a view, so a supervisor that lost its place has to ask. It loses
       // its place whenever its own turn ends without one: a crash, a credit failure, a /reload.
       // Its answer to a stale context is to invent, so give it real data instead.
-      await publishMidRun(ctx, "sent because you asked for a view");
+      // From turn 0, not the diff. A supervisor only asks after a crash or a /reload, when its own
+      // copy is gone, and answering that with "0 new turns since your last look" leaves it inventing.
+      await publishView(ctx, "sent because you asked for a view", 0);
       return;
     }
 
@@ -424,8 +431,12 @@ export default function (pi: any) {
     });
   });
 
-  /** Publish what the worker looks like right now. Used mid-turn, on a timer and on a signal. */
-  async function publishMidRun(context: any, why: string) {
+  /**
+   * Publish what the worker looks like right now. Used at pairing, on a timer and when asked.
+   * `since` is the turn the view starts at: the diff for a routine look, 0 when the supervisor
+   * needs the whole picture again.
+   */
+  async function publishView(context: any, why: string, since = sentTurns) {
     // Claimed before the await, not after. ps takes long enough that a second timer tick would
     // otherwise start its own look while this one is still waiting.
     lastLook = Date.now();
@@ -433,17 +444,20 @@ export default function (pi: any) {
     // Checked here too. This view replaces the one done reads, so leaving it out would report
     // "child pi processes still running: none" and unblock done while a subagent is running.
     const subagents = await childPiProcesses();
+    // Asked at pairing and on a rejoin, and the worker is often sitting at the prompt then. Saying
+    // "working" there sends the supervisor a check-in nudge about a worker that is waiting on it.
+    const idle = context.isIdle();
     const view = buildView({
       goal: state.goal,
-      status: `working, ${why}`,
+      status: `${idle ? "idle" : "working"}, ${why}`,
       entries,
-      since: sentTurns,
+      since,
       subagents,
       model: workerModel(await ownSession()),
     });
     sentTurns = turnsSince(entries);
-    send({ t: "view", to: state.pairedId, view, stopped: false });
-    debug("published mid-run view", { why, to: state.pairedId, sentTurns });
+    send({ t: "view", to: state.pairedId, view, stopped: idle });
+    debug("published view", { why, to: state.pairedId, sentTurns, idle });
   }
 
   /**
@@ -459,7 +473,7 @@ export default function (pi: any) {
     if (state.role !== "worker" || !channel || watchTimer) return;
     watchTimer = setInterval(() => {
       if (Date.now() - lastLook < WATCH_INTERVAL_MS) return;
-      publishMidRun(ctx, `routine check in, ${Math.round((Date.now() - turnStartedAt) / 1000)}s into this turn`).catch((err: Error) => {
+      publishView(ctx, `routine check in, ${Math.round((Date.now() - turnStartedAt) / 1000)}s into this turn`).catch((err: Error) => {
         debug("timer look failed", { error: err.message });
       });
     }, WATCH_POLL_MS);
@@ -637,6 +651,18 @@ export default function (pi: any) {
     },
   });
 
+  /**
+   * One verdict per view, enforced rather than asked for.
+   *
+   * The tool result cannot end a turn by itself, so a supervisor with nothing to add calls the
+   * same verdict again on the next hop, and again. Observed 2026-08-13: 98 let_it_run calls in one
+   * turn, one every 2 seconds, all reading "waiting for the first view". abort() stops the loop
+   * before the next model call. The tool result is already recorded by then, because the loop
+   * pushes results and only afterwards streams the next assistant message (pi-agent-core
+   * agent-loop.js:115-119). - CLAUDE
+   */
+  const endLook = (context: any) => context.abort();
+
   pi.registerTool({
     name: "worker_view",
     label: "Worker view",
@@ -690,7 +716,7 @@ Tell them in your reply, quoting it, so they can correct it.`,
     label: "Steer worker",
     description: TOOL_STEER,
     parameters: Type.Object({ message: Type.String({ description: "One concrete next action, 1 to 3 sentences." }) }),
-    execute: async (_id: string, params: { message: string }) => {
+    execute: async (_id: string, params: { message: string }, _signal: unknown, _update: unknown, context: any) => {
       if (state.role !== "supervisor") {
         return { content: [{ type: "text", text: "Not supervising. Run /supervise <worker> first." }], isError: true };
       }
@@ -718,6 +744,7 @@ Tell them in your reply, quoting it, so they can correct it.`,
       const warning = repeat && repeat.score >= OVERLAP_WARN
         ? `\nThis says much the same as instruction ${repeat.n}: "${repeat.old}"\nIf the next view shows nothing new, say what evidence makes repeating it worth another round, or change approach.`
         : "";
+      endLook(context);
       return { content: [{ type: "text", text: `Steered. That is instruction ${state.steerRounds}.${warning}` }] };
     },
   });
@@ -735,10 +762,11 @@ Tell them in your reply, quoting it, so they can correct it.`,
     label: "Let the worker run",
     description: TOOL_LET_IT_RUN,
     parameters: Type.Object({ reason: Type.String({ description: "What in the view says it is on track, in one line." }) }),
-    execute: async (_id: string, params: { reason: string }) => {
+    execute: async (_id: string, params: { reason: string }, _signal: unknown, _update: unknown, context: any) => {
       if (state.role !== "supervisor") {
         return { content: [{ type: "text", text: "Not supervising." }], isError: true };
       }
+      endLook(context);
       return { content: [{ type: "text", text: LET_IT_RUN_ACK(params.reason) }] };
     },
   });
@@ -748,7 +776,7 @@ Tell them in your reply, quoting it, so they can correct it.`,
     label: "Finish supervision",
     description: TOOL_DONE,
     parameters: Type.Object({ reason: Type.String({ description: "The artifact path and the quoted line that proves it." }) }),
-    execute: async (_id: string, params: { reason: string }) => {
+    execute: async (_id: string, params: { reason: string }, _signal: unknown, _update: unknown, context: any) => {
       if (state.role !== "supervisor") {
         return { content: [{ type: "text", text: "Not supervising." }], isError: true };
       }
@@ -766,6 +794,7 @@ Tell them in your reply, quoting it, so they can correct it.`,
       send({ t: "done", to: state.pairedId, reason: params.reason });
       const rounds = state.steerRounds;
       reset(`supervision finished: ${params.reason}`);
+      endLook(context);
       return { content: [{ type: "text", text: `Supervision finished after ${rounds} instructions.` }] };
     },
   });

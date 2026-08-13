@@ -44,6 +44,7 @@ function harness(
   const published: any[] = [];
   const notices: string[] = [];
   const selects: Array<{ title: string; options: string[] }> = [];
+  const aborts: boolean[] = [];
   let onEvent: (e: any) => void = () => {};
 
   const peerId = ownId === WORKER_ID ? SUPER_ID : WORKER_ID;
@@ -114,6 +115,8 @@ function harness(
     cwd: process.cwd(),
     isIdle: () => isIdle,
     hasUI: true,
+    // pi's own ExtensionContext.abort(): stops the agent loop before its next model call.
+    abort: () => aborts.push(true),
     ui: {
       notify: (m: string) => notices.push(m),
       // pi's own ExtensionUIContext.select: returns the chosen option, or undefined if cancelled.
@@ -142,6 +145,7 @@ function harness(
     published,
     notices,
     selects,
+    aborts,
     status,
     async start() {
       extension(pi as any);
@@ -518,8 +522,10 @@ test("/supervise look asks the worker for a fresh view, rather than the supervis
   await new Promise((r) => setTimeout(r, 300));
 
   const view = worker.published.filter((p) => p.t === "view").at(-1);
+  // The whole transcript, not the diff, even though the pairing view already sent it. A supervisor
+  // asks for a look when its own copy is gone, so "nothing new since your last look" is no answer.
   assert.match(view.view, /WHAT I DID LAST/);
-  assert.equal(view.stopped, false, "asked for, so it is a check in and not a decision point");
+  assert.equal(view.stopped, true, "this worker is idle, and the flag follows the worker not the trigger");
 });
 
 test("let_it_run says the turn is over, so it is not called four times running", async () => {
@@ -533,6 +539,38 @@ test("let_it_run says the turn is over, so it is not called four times running",
   const result = await sup.tools.get("let_it_run")!.execute("id", { reason: "job 291 is at 305 of 600" }, undefined, undefined, sup.ctx);
   assert.match(result.content[0].text, /job 291 is at 305 of 600/, "the reason is still recorded");
   assert.match(result.content[0].text, /turn is over/);
+});
+
+test("every verdict ends the turn, because saying so is not enough", async () => {
+  // Session 019ffa5f, 2026-08-13: 98 let_it_run calls in one turn, one every 2 seconds, each one
+  // answered "Recorded. Your turn is over." and each one ignored. Words in a tool result cannot
+  // stop a loop, so each verdict aborts the agent loop itself.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "@worker make the results table");
+
+  await sup.tools.get("let_it_run")!.execute("id", { reason: "on track" }, undefined, undefined, sup.ctx);
+  assert.equal(sup.aborts.length, 1, "let_it_run ends the look");
+  await sup.tools.get("steer")!.execute("id", { message: "read the log" }, undefined, undefined, sup.ctx);
+  assert.equal(sup.aborts.length, 2, "steer ends the look");
+  await sup.tools.get("done")!.execute("id", { reason: "results.md line 3 says X" }, undefined, undefined, sup.ctx);
+  assert.equal(sup.aborts.length, 3, "done ends the look");
+
+  // A view is a fresh user message, so the next look still gets its own turn. Only the hop from a
+  // verdict back into the model is cut.
+  const worker = harness(WORKER_ID);
+  await worker.start();
+  assert.equal(worker.aborts.length, 0, "nothing aborts a worker's own turn");
+});
+
+test("a tool a worker cannot use never aborts its turn", async () => {
+  // The verdict tools are guarded by role. The guard returns before the abort, so a stray call in
+  // an unpaired session cannot kill that session's turn.
+  const lone = harness(SUPER_ID);
+  await lone.start();
+  const refused = await lone.tools.get("let_it_run")!.execute("id", { reason: "x" }, undefined, undefined, lone.ctx);
+  assert.equal(refused.isError, true);
+  assert.equal(lone.aborts.length, 0);
 });
 
 test("a resume onto a session that is gone drops the pairing and says so", async () => {
@@ -585,10 +623,13 @@ test("done unpairs the worker, so it stops publishing views", async () => {
   const worker = harness(WORKER_ID, { entries: [message("user", "hi")] });
   await worker.start();
   worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
-  await new Promise((r) => setTimeout(r, 5));
+  // Long enough for the pairing view, which waits on a real ps call.
+  await new Promise((r) => setTimeout(r, 300));
+  const atPairing = worker.published.filter((p) => p.t === "view").length;
+  assert.equal(atPairing, 1, "pairing publishes a first view, so the supervisor has something to read");
 
   await worker.settle();
-  assert.equal(worker.published.filter((p) => p.t === "view").length, 1, "paired worker publishes");
+  assert.equal(worker.published.filter((p) => p.t === "view").length, 2, "paired worker publishes");
 
   worker.deliver(SUPER_ID, { t: "done", to: WORKER_ID, reason: "results.md line 3" });
   await new Promise((r) => setTimeout(r, 5));
@@ -596,7 +637,7 @@ test("done unpairs the worker, so it stops publishing views", async () => {
   await worker.settle();
   assert.equal(
     worker.published.filter((p) => p.t === "view").length,
-    1,
+    2,
     "after done the worker must not publish again",
   );
 });
@@ -968,17 +1009,18 @@ test("the supervisor gets a look at a working worker every half hour, without be
   const worker = harness(WORKER_ID, { entries: [message("user", "do the thing")], isIdle: false });
   await worker.start();
   worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
-  await new Promise((r) => setTimeout(r, 5)); // pairing resolves the session id, which is async
+  await new Promise((r) => setTimeout(r, 300)); // pairing publishes a view, and that runs ps
+  const atPairing = worker.published.filter((p) => p.t === "view").length;
 
   await worker.turnStart();
   t.mock.timers.tick(1_500_000);
-  assert.equal(worker.published.filter((p) => p.t === "view").length, 0, "25 minutes in is too early");
+  assert.equal(worker.published.filter((p) => p.t === "view").length, atPairing, "25 minutes in is too early");
 
   t.mock.timers.tick(400_000);
   await new Promise((r) => setTimeout(r, 300)); // the look runs ps, so give the real clock a moment
-  const views = worker.published.filter((p) => p.t === "view");
+  const views = worker.published.filter((p) => p.t === "view").slice(atPairing);
   assert.equal(views.length, 1, "past half an hour the supervisor gets a look");
-  assert.equal(views[0].stopped, false, "a mid-turn look is a check in, not a decision point");
+  assert.equal(views[0].stopped, false, "this worker is mid-turn, so it is a check in");
   assert.match(views[0].view, /status: working, routine check in, \d+s into this turn/);
   // A look that forgets the subagent line reports "none" and unblocks done while one is running.
   assert.match(views[0].view, /^child pi processes still running: /m);
@@ -995,7 +1037,7 @@ test("the worker counts reviews in a row where nothing changed", async () => {
   const worker = harness(WORKER_ID, { entries });
   await worker.start();
   worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
-  await new Promise((r) => setTimeout(r, 5));
+  await new Promise((r) => setTimeout(r, 300)); // the pairing view runs ps
 
   await worker.settle();
   entries.push(message("assistant", "I will get to that shortly."));
@@ -1003,7 +1045,8 @@ test("the worker counts reviews in a row where nothing changed", async () => {
   entries.push(message("assistant", "Yes, I agree that is the right approach."));
   await worker.settle();
 
-  const views = worker.published.filter((p) => p.t === "view");
+  // The pairing view is not a review, so it is dropped here and does not count.
+  const views = worker.published.filter((p) => p.t === "view").slice(1);
   assert.doesNotMatch(views[0].view, /reviews in a row/, "the first review has nothing to compare against");
   assert.match(views[2].view, /no new file, commit or error for 2 reviews in a row/);
 

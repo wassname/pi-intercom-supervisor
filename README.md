@@ -136,8 +136,20 @@ connected and then says which it is: still supervising, or dropped because the o
 gone. A resumed supervisor also has its writing tools taken off again, which the `/supervise`
 handler alone would not do.
 
-The supervisor looks at a working worker every half hour, and again whenever the worker stops.
-Those two looks ask for different things. A stop is a decision point. A check in leans on `let_it_run`,
+The worker sends a view when it is paired, again whenever it stops, and every half hour while a
+turn runs. The pairing one exists because the supervisor's opening turn would otherwise have
+nothing to read, and a supervisor with nothing to read still answers: on 2026-08-13 one called
+`let_it_run` 98 times in a single turn, once every two seconds, each time over "waiting for the
+first view". A worker paired while it sits at the prompt never settles, so waiting for the first
+stop can mean waiting for ever.
+
+A verdict ends the supervisor's turn, by calling pi's own `ctx.abort()`. The tool result already
+said "your turn is over" and that is what those 98 calls ignored; words in a tool result cannot
+stop a loop, because the loop is what reads them. The result is still recorded, since the agent
+loop pushes tool results before it streams the next assistant message
+(`pi-agent-core/agent-loop.js:115-119`). One view, one verdict, one turn.
+
+A stop and a check in ask for different things. A stop is a decision point. A check in leans on `let_it_run`,
 because interrupting a working agent costs it its train of thought. The original also ran two
 mechanical checks mid-turn, five tool errors in a row and five reads of one file with no edit.
 Those are deleted: the supervisor sees the same errors in the view and judges them itself. Ported
@@ -194,7 +206,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 79 tests, free apart from a ps call
+npm test                      # 81 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```
