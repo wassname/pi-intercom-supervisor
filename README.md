@@ -32,6 +32,11 @@ which is the start of the `pi --session <id>` line in that terminal. The `@` is 
 with spaces in it out of the target: a first word that names no session is refused, where it used
 to be folded into the goal without a word. `/supervise stop` ends it.
 
+A goal that is one word with a slash or a dot in it is a path, and the file is the goal:
+`/supervise docs/GOAL.md`, or `/supervise goal docs/GOAL.md` to change it later. A goal worth
+grading against runs to paragraphs of acceptance evidence, and retyping it each run is how the copy
+you steer by drifts from the copy you grade by. A missing file stops the pairing and names the path.
+
 `/supervise goal <new goal>` changes the goal in place. The worker hears it, a fresh view follows,
 and the supervisor keeps its memory of the steers it has already sent, which stopping and pairing
 again would throw away.
@@ -206,7 +211,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 81 tests, free apart from a ps call
+npm test                      # 83 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```

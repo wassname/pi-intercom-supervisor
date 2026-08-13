@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
-import { copyFileSync, mkdtempSync } from "node:fs";
+import { copyFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { INTERCOM_EXTENSION_REGISTER_EVENT } from "pi-intercom/extension-api.ts";
@@ -813,6 +813,32 @@ test("with two free sessions here, /supervise asks which one, and pairs with the
     sup.published.filter((p) => p.t === "pair"),
     [{ t: "pair", to: "session-third", goal: "make the results table" }],
   );
+});
+
+test("a goal that is a path is read from the file, so it is not pasted every run", async () => {
+  // The goal is the thing the work is graded against, and pasting it into a prompt each run is how
+  // the copy you steer by drifts from the copy you grade by.
+  const dir = mkdtempSync(join(tmpdir(), "supervise-goal-"));
+  const path = join(dir, "GOAL.md");
+  const goal = "**GOAL - preference learning.**\nEvidence a) a 256 token trace.\nEvidence b) NLL beats the hold.";
+  writeFileSync(path, `${goal}\n`);
+
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", `@worker ${path}`);
+  assert.deepEqual(sup.published.filter((p) => p.t === "pair"), [{ t: "pair", to: WORKER_ID, goal }]);
+
+  // A path that is not there stops the pairing, rather than setting the goal to the path itself.
+  const typo = harness(SUPER_ID);
+  await typo.start();
+  await assert.rejects(() => typo.run("supervise", `@worker ${join(dir, "NOPE.md")}`), /NOPE\.md/);
+  assert.equal(typo.published.filter((p) => p.t === "pair").length, 0);
+
+  // A goal with spaces is still a goal, even when a word in it has a dot.
+  const plain = harness(SUPER_ID);
+  await plain.start();
+  await plain.run("supervise", "@worker make results.md say what won");
+  assert.equal(plain.published.filter((p) => p.t === "pair")[0].goal, "make results.md say what won");
 });
 
 test("a long goal is one short line above the picker, and reaches the worker whole", async () => {

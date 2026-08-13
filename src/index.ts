@@ -7,6 +7,8 @@
  * triggers its own turn locally with pi.sendUserMessage. The broker stamps fromSessionId from its
  * own registry, so pairing on that ID cannot be forged by a payload.
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { Type } from "typebox";
 import type {
   IntercomExtensionChannel,
@@ -55,6 +57,18 @@ import {
  */
 function workerModel(info: { model: string; contextPct?: number }): string {
   return info.contextPct === undefined ? info.model : `${info.model}, ${info.contextPct}% of its context used`;
+}
+
+/**
+ * A goal that is one word containing a slash or a dot is a path, and the file is the goal.
+ *
+ * A goal worth grading against runs to paragraphs of acceptance evidence, and retyping it into a
+ * prompt each run is how the copy you steer by drifts from the copy you grade by. A missing file
+ * throws, with the path in the message.
+ */
+function readGoal(cwd: string, goal: string): string {
+  if (!/^\S+$/.test(goal) || !/[/.]/.test(goal)) return goal;
+  return readFileSync(resolve(cwd, goal), "utf8").trim();
 }
 
 /** A goal on one line, for a notice or a picker title. The goal itself is never cut. */
@@ -526,7 +540,7 @@ export default function (pi: any) {
   // ---- supervisor side: one command and three tools ---------------------------------------
 
   pi.registerCommand("supervise", {
-    description: "Supervise the other pi session here: /supervise [goal], /supervise @name [goal], /supervise goal <new goal>, /supervise look, /supervise stop",
+    description: "Supervise the other pi session here: /supervise [goal or path to a goal file], /supervise @name [goal], /supervise goal <new goal>, /supervise look, /supervise stop",
     handler: async (args: string, context: any) => {
       ctx = context;
       const text = args.trim();
@@ -551,7 +565,7 @@ export default function (pi: any) {
       // Change the goal without breaking the pairing. Stopping and pairing again is the only other
       // way, and that throws away the supervisor's memory of its own steers.
       if (text === "goal" || text.startsWith("goal ")) {
-        const goal = text.slice(4).trim();
+        const goal = readGoal(context.cwd, text.slice(4).trim());
         if (state.role !== "supervisor") {
           context.ui?.notify?.("intercom-supervisor: not supervising, so there is no goal to change", "error");
           return;
@@ -604,9 +618,10 @@ export default function (pi: any) {
           return;
         }
         worker = match[0];
-        goal = rest.join(" ");
+        goal = readGoal(context.cwd, rest.join(" "));
       } else {
         // Nothing named, so the whole line is the goal and this has to find the worker.
+        goal = readGoal(context.cwd, text);
         const here = listed.filter((s: any) => s.cwd === context.cwd);
         if (!here.length) {
           context.ui?.notify?.(`intercom-supervisor: no other session in ${context.cwd}`, "error");
@@ -629,11 +644,10 @@ export default function (pi: any) {
           );
           // The goal is a title here, not the goal itself. Yours run to paragraphs of acceptance
           // evidence, and the whole thing above a three-line picker is a wall to read past.
-          const picked = await context.ui.select(`which session works on "${firstLine(text)}"`, labels);
+          const picked = await context.ui.select(`which session works on "${firstLine(goal)}"`, labels);
           if (picked === undefined) return; // cancelled, and the notice would say nothing new
           worker = ordered[labels.indexOf(picked)];
         }
-        goal = text;
       }
       const target = worker.name ?? worker.id.slice(0, 8);
 
