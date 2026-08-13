@@ -148,11 +148,13 @@ nothing to read, and a supervisor with nothing to read still answers: on 2026-08
 first view". A worker paired while it sits at the prompt never settles, so waiting for the first
 stop can mean waiting for ever.
 
-A verdict ends the supervisor's turn, by calling pi's own `ctx.abort()`. The tool result already
+A second verdict in one answer is cut off with pi's own `ctx.abort()`. The tool result already
 said "your turn is over" and that is what those 98 calls ignored; words in a tool result cannot
 stop a loop, because the loop is what reads them. The result is still recorded, since the agent
 loop pushes tool results before it streams the next assistant message
-(`pi-agent-core/agent-loop.js:115-119`). One view, one verdict, one turn.
+(`pi-agent-core/agent-loop.js:115-119`). The first verdict is left alone, because `abort()` prints
+`This operation was aborted` in the terminal and the ordinary one-verdict answer should not look
+like a fault.
 
 A stop and a check in ask for different things. A stop is a decision point. A check in leans on `let_it_run`,
 because interrupting a working agent costs it its train of thought. The original also ran two

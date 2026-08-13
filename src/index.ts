@@ -424,6 +424,11 @@ export default function (pi: any) {
 
   // ---- lifecycle -------------------------------------------------------------------------
 
+  // Once per run, before the first model call, so the verdict count is per answer and not per look.
+  pi.on("agent_start", () => {
+    verdictsThisRun = 0;
+  });
+
   pi.on("session_start", async (_event: unknown, context: any) => {
     ctx = context;
     state = restoreState(context.sessionManager.getEntries());
@@ -674,16 +679,22 @@ export default function (pi: any) {
   });
 
   /**
-   * One verdict per view, enforced rather than asked for.
+   * One verdict per view, cut off at the second.
    *
-   * The tool result cannot end a turn by itself, so a supervisor with nothing to add calls the
-   * same verdict again on the next hop, and again. Observed 2026-08-13: 98 let_it_run calls in one
-   * turn, one every 2 seconds, all reading "waiting for the first view". abort() stops the loop
-   * before the next model call. The tool result is already recorded by then, because the loop
-   * pushes results and only afterwards streams the next assistant message (pi-agent-core
-   * agent-loop.js:115-119). - CLAUDE
+   * The tool result says the turn is over and the model does not always believe it: on 2026-08-13
+   * a supervisor called let_it_run 98 times in one turn, one call every 2 seconds. A tool result
+   * is what the loop feeds back to the model, so no wording in it can stop the loop. abort() can,
+   * and the result is still recorded, because the loop pushes results and only then streams the
+   * next assistant message (pi-agent-core agent-loop.js:115-119).
+   *
+   * The first verdict is left alone. abort() prints "This operation was aborted" in the terminal,
+   * and the ordinary one-verdict turn should not look like a fault. - CLAUDE
    */
-  const endLook = (context: any) => context.abort();
+  let verdictsThisRun = 0;
+  const endLook = (context: any) => {
+    verdictsThisRun += 1;
+    if (verdictsThisRun > 1) context.abort();
+  };
 
   pi.registerTool({
     name: "worker_view",

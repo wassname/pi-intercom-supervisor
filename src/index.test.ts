@@ -157,6 +157,10 @@ function harness(
     async turnStart() {
       for (const fn of handlers.get("turn_start") ?? []) await fn({}, ctx);
     },
+    /** One per run, before the first model call (pi-agent-core agent-loop.js:48). */
+    async agentStart() {
+      for (const fn of handlers.get("agent_start") ?? []) await fn({}, ctx);
+    },
     async run(command: string, args: string) {
       await commands.get(command)!(args, ctx);
     },
@@ -541,35 +545,39 @@ test("let_it_run says the turn is over, so it is not called four times running",
   assert.match(result.content[0].text, /turn is over/);
 });
 
-test("every verdict ends the turn, because saying so is not enough", async () => {
+test("a second verdict in one answer is cut off, because saying so is not enough", async () => {
   // Session 019ffa5f, 2026-08-13: 98 let_it_run calls in one turn, one every 2 seconds, each one
   // answered "Recorded. Your turn is over." and each one ignored. Words in a tool result cannot
-  // stop a loop, so each verdict aborts the agent loop itself.
+  // stop a loop, because the loop is what reads them.
   const sup = harness(SUPER_ID);
   await sup.start();
   await sup.run("supervise", "@worker make the results table");
+  await sup.agentStart();
 
-  await sup.tools.get("let_it_run")!.execute("id", { reason: "on track" }, undefined, undefined, sup.ctx);
-  assert.equal(sup.aborts.length, 1, "let_it_run ends the look");
+  const letItRun = sup.tools.get("let_it_run")!;
+  await letItRun.execute("id", { reason: "on track" }, undefined, undefined, sup.ctx);
+  assert.equal(sup.aborts.length, 0, "one verdict is the shape, and abort() prints an error line");
+  await letItRun.execute("id", { reason: "still on track" }, undefined, undefined, sup.ctx);
+  assert.equal(sup.aborts.length, 1, "the second is the loop starting, so it is cut");
+  await letItRun.execute("id", { reason: "and again" }, undefined, undefined, sup.ctx);
+  assert.equal(sup.aborts.length, 2, "and it stays cut until the next view");
+
+  // The next view is a new answer, and it gets a clean verdict of its own.
+  await sup.agentStart();
   await sup.tools.get("steer")!.execute("id", { message: "read the log" }, undefined, undefined, sup.ctx);
-  assert.equal(sup.aborts.length, 2, "steer ends the look");
-  await sup.tools.get("done")!.execute("id", { reason: "results.md line 3 says X" }, undefined, undefined, sup.ctx);
-  assert.equal(sup.aborts.length, 3, "done ends the look");
-
-  // A view is a fresh user message, so the next look still gets its own turn. Only the hop from a
-  // verdict back into the model is cut.
-  const worker = harness(WORKER_ID);
-  await worker.start();
-  assert.equal(worker.aborts.length, 0, "nothing aborts a worker's own turn");
+  assert.equal(sup.aborts.length, 2, "the count is per answer, not per pairing");
 });
 
 test("a tool a worker cannot use never aborts its turn", async () => {
-  // The verdict tools are guarded by role. The guard returns before the abort, so a stray call in
-  // an unpaired session cannot kill that session's turn.
+  // The verdict tools are guarded by role. The guard returns before the count, so a stray call in
+  // an unpaired session can never reach the abort.
   const lone = harness(SUPER_ID);
   await lone.start();
-  const refused = await lone.tools.get("let_it_run")!.execute("id", { reason: "x" }, undefined, undefined, lone.ctx);
-  assert.equal(refused.isError, true);
+  await lone.agentStart();
+  for (const _ of [1, 2, 3]) {
+    const refused = await lone.tools.get("let_it_run")!.execute("id", { reason: "x" }, undefined, undefined, lone.ctx);
+    assert.equal(refused.isError, true);
+  }
   assert.equal(lone.aborts.length, 0);
 });
 

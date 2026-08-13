@@ -29,10 +29,12 @@ export function loadSupervisorPrompt(cwd: string): { prompt: string; source: str
 /**
  * Sent once when pairing, so the supervisor knows its job before the first view arrives.
  *
- * The last line used to read "Reply with exactly: watching". Observed in session
- * 019ff4eb-c66c on 2026-08-12: deepseek-v4-flash obeyed it, then answered both later views with
- * the plain word "wait" and made no tool call at all, so two views produced nothing. A text
- * answer on turn one teaches the shape for every turn after it.
+ * The last line has been wrong twice, in opposite directions. "Reply with exactly: watching"
+ * taught a text answer, and deepseek-v4-flash then answered two real views with the plain word
+ * "wait" and no tool call (session 019ff4eb-c66c, 2026-08-12). Ordering a let_it_run call instead
+ * taught the opposite: with no view to read, one supervisor answered its own brief 98 times in a
+ * row (session 019ffa5f, 2026-08-13). The brief now asks for neither, because the first real view
+ * arrives with the pairing and that is what teaches the shape.
  */
 export const BRIEF = (policy: string, goal: string, worker: string) =>
   `${policy}
@@ -60,9 +62,9 @@ to write down what matters before it loses the detail.
 There is no round limit and no budget. Supervision runs until the human stops it. Ending early is
 the failure this exists to prevent, so never stop because it feels like enough.
 
-Do not act yet. The first view arrives on its own. Answer this message by calling let_it_run,
-with the reason "paired, waiting for the first view". Make the first answer a tool call, because
-every answer after it is a tool call too.`;
+The worker sends its first view as it pairs, so it is either below this message already or a
+moment away. Judge that one. Do not answer this message with a verdict: there is nothing to
+judge in it.`;
 
 /**
  * Sent on a resume or a /reload that finds the pairing still alive.
