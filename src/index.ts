@@ -57,6 +57,12 @@ function workerModel(info: { model: string; contextPct?: number }): string {
   return info.contextPct === undefined ? info.model : `${info.model}, ${info.contextPct}% of its context used`;
 }
 
+/** A goal on one line, for a notice or a picker title. The goal itself is never cut. */
+function firstLine(goal: string, width = 60): string {
+  const line = goal.trim().split("\n")[0].trim();
+  return line.length > width ? `${line.slice(0, width)}...` : line;
+}
+
 /**
  * The footer line, kept to two words plus a glyph.
  *
@@ -341,7 +347,7 @@ export default function (pi: any) {
       staleReviews = 0;
       save();
       send({ t: "paired", to: from });
-      ctx?.ui?.notify?.(`supervised by ${from.slice(0, 8)}: ${wire.goal}`, "info");
+      ctx?.ui?.notify?.(`supervised by ${from.slice(0, 8)}: ${firstLine(wire.goal)}`, "info");
       // A first view goes with the acknowledgement. Without it the supervisor's opening turn has
       // nothing to read, and it answers anyway: on 2026-08-13 it called let_it_run 98 times over
       // "waiting for the first view". A worker paired while idle never settles, so waiting for
@@ -621,7 +627,9 @@ export default function (pi: any) {
           const labels = ordered.map(
             (s: any) => `${s.name ?? "(unnamed)"} ${s.id.slice(0, 8)}${free.has(s.id) ? "" : "  (no answer: child run, paired, gone, or not reloaded)"}`,
           );
-          const picked = await context.ui.select(`which session works on: ${text}`, labels);
+          // The goal is a title here, not the goal itself. Yours run to paragraphs of acceptance
+          // evidence, and the whole thing above a three-line picker is a wall to read past.
+          const picked = await context.ui.select(`which session works on "${firstLine(text)}"`, labels);
           if (picked === undefined) return; // cancelled, and the notice would say nothing new
           worker = ordered[labels.indexOf(picked)];
         }

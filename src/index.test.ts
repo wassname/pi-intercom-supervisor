@@ -815,6 +815,28 @@ test("with two free sessions here, /supervise asks which one, and pairs with the
   );
 });
 
+test("a long goal is one short line above the picker, and reaches the worker whole", async () => {
+  // wassname's real goals are paragraphs of acceptance evidence. The whole thing as a picker title
+  // is a wall of text to read past, and he already knows it: he just typed it.
+  const goal = `**GOAL - preference learning and extrapolation.**
+Learn a user's preferences online from interaction and extrapolate them: an
+explicit, addressable latent user state that predicts what this user wants.`;
+  const sup = harness(SUPER_ID, {
+    extraSessions: [{ id: "session-third", pid: 999, name: "other", cwd: process.cwd() }],
+    freeSessions: [WORKER_ID, "session-third"],
+    pick: 0,
+  });
+  await sup.start();
+  await sup.run("supervise", goal);
+
+  const title = sup.selects[0].title;
+  assert.ok(title.length < 100, `the title is a label, not the goal: ${title}`);
+  assert.match(title, /\*\*GOAL - preference learning and extrapolation\.\*\*/, "enough to tell two goals apart");
+  assert.ok(!title.includes("\n"), "one line");
+  // Cut for display only. What the worker judges itself against is never cut.
+  assert.equal(sup.published.filter((p) => p.t === "pair")[0].goal, goal);
+});
+
 test("a session that stayed quiet is still on the list, because 0 free is a dead end", async () => {
   // Live 2026-08-13: five child runs answered nothing and the worker had not been reloaded, so a
   // roll call alone left wassname with "0 free sessions" and no way through.
