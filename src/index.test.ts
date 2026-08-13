@@ -573,6 +573,31 @@ test("a second verdict in one answer is cut off, because saying so is not enough
   assert.equal(sup.aborts.length, 2, "the count is per answer, not per pairing");
 });
 
+test("a view that arrives mid-answer buys its own verdict, so the second look is not cut", async () => {
+  // 2026-08-13, live: two let_it_run calls, both quoting real worker state ("waiting for job 24
+  // Evidence-b"), and the second answered "This operation was aborted". A view sent while the
+  // supervisor is busy is queued as a followUp, and a followUp runs inside the agent loop that is
+  // already going, so agent_start never fires a second time and the count carried over.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "@worker make the results table");
+  await sup.agentStart();
+
+  const letItRun = sup.tools.get("let_it_run")!;
+  await letItRun.execute("id", { reason: "no new turns since the last look" }, undefined, undefined, sup.ctx);
+  assert.equal(sup.aborts.length, 0);
+
+  // Half an hour later, still the same agent loop.
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "job 24 Evidence-b queued", stopped: false });
+  await new Promise((r) => setTimeout(r, 5));
+  await letItRun.execute("id", { reason: "waiting for job 24 Evidence-b to land" }, undefined, undefined, sup.ctx);
+  assert.equal(sup.aborts.length, 0, "a second view is a second look, and each look gets one verdict");
+
+  // The loop guard still bites within one look.
+  await letItRun.execute("id", { reason: "and again" }, undefined, undefined, sup.ctx);
+  assert.equal(sup.aborts.length, 1);
+});
+
 test("a tool a worker cannot use never aborts its turn", async () => {
   // The verdict tools are guarded by role. The guard returns before the count, so a stray call in
   // an unpaired session can never reach the abort.

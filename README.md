@@ -161,7 +161,10 @@ stop a loop, because the loop is what reads them. The result is still recorded, 
 loop pushes tool results before it streams the next assistant message
 (`pi-agent-core/agent-loop.js:115-119`). The first verdict is left alone, because `abort()` prints
 `This operation was aborted` in the terminal and the ordinary one-verdict answer should not look
-like a fault.
+like a fault. "One answer" means one look, and the count resets when a view arrives as well as on
+`agent_start`. A view that lands while the supervisor is busy is queued as a follow up, and a
+follow up runs inside the agent loop that is already going, so `agent_start` does not fire again.
+Resetting on that event alone charged the second honest verdict of the night for the first.
 
 A stop and a check in ask for different things. A stop is a decision point. A check in leans on `let_it_run`,
 because interrupting a working agent costs it its train of thought. The original also ran two
@@ -220,7 +223,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 84 tests, free apart from a ps call
+npm test                      # 85 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```

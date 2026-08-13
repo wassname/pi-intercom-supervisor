@@ -421,6 +421,10 @@ export default function (pi: any) {
 
     if (wire.t === "view" && state.role === "supervisor") {
       latestView = wire.view;
+      // A new view is a new look, so it gets its own verdict. agent_start alone is not enough: a
+      // followUp is consumed inside the running agent loop, so no second agent_start fires and the
+      // count carries over. That aborted the second honest verdict of a busy night. - CLAUDE
+      verdictsThisLook = 0;
       // followUp, not steer: let the supervisor finish the decision it is making, then look again.
       // With no option at all pi throws "Agent is already processing" and the view is lost, which
       // on a two minute look means the supervisor skips a whole look for no visible reason.
@@ -438,9 +442,10 @@ export default function (pi: any) {
 
   // ---- lifecycle -------------------------------------------------------------------------
 
-  // Once per run, before the first model call, so the verdict count is per answer and not per look.
+  // The other reset. This one covers a turn the human starts by typing; the view branch above
+  // covers a view, which is the usual way a look begins.
   pi.on("agent_start", () => {
-    verdictsThisRun = 0;
+    verdictsThisLook = 0;
   });
 
   pi.on("session_start", async (_event: unknown, context: any) => {
@@ -702,12 +707,13 @@ export default function (pi: any) {
    * next assistant message (pi-agent-core agent-loop.js:115-119).
    *
    * The first verdict is left alone. abort() prints "This operation was aborted" in the terminal,
-   * and the ordinary one-verdict turn should not look like a fault. - CLAUDE
+   * and the ordinary one-verdict turn should not look like a fault. So the count must reset on
+   * every look, or an honest second look pays for the first: see the two reset sites. - CLAUDE
    */
-  let verdictsThisRun = 0;
+  let verdictsThisLook = 0;
   const endLook = (context: any) => {
-    verdictsThisRun += 1;
-    if (verdictsThisRun > 1) context.abort();
+    verdictsThisLook += 1;
+    if (verdictsThisLook > 1) context.abort();
   };
 
   pi.registerTool({
