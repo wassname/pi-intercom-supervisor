@@ -12,6 +12,10 @@ export const NAMESPACE = "wassname/pi-intercom-supervisor/v1";
 // (wassname's SUPERVISOR.md, citing arXiv:2410.07095: 8.7% vs 0.8% on MLE-bench).
 
 export type Wire =
+  /** Roll call, broadcast, so "to" is the wildcard rather than a session. Only /supervise sends it. */
+  | { t: "who"; to: "*" }
+  /** The answer to a roll call: I load this extension, I am free, and I am not a child run. */
+  | { t: "here"; to: string }
   | { t: "pair"; to: string; goal: string }
   | { t: "paired"; to: string }
   | { t: "goal"; to: string; goal: string }
@@ -32,7 +36,7 @@ export function isWire(payload: unknown): payload is Wire {
   if (t === "view") return typeof view === "string" && typeof stopped === "boolean";
   if (t === "directive") return typeof text === "string" && text.trim().length > 0;
   if (t === "done") return typeof reason === "string";
-  return t === "unpair" || t === "paired" || t === "look";
+  return t === "unpair" || t === "paired" || t === "look" || t === "who" || t === "here";
 }
 
 /**

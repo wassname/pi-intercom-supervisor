@@ -24,7 +24,14 @@ const SUPER_ID = "session-supervisor";
 /** Fake ExtensionAPI, same shape as pi-intercom's own test harness. */
 function harness(
   ownId: string,
-  { entries = [] as any[], isIdle = true, branch = undefined as any[] | undefined, extraSessions = [] as any[] } = {},
+  {
+    entries = [] as any[],
+    isIdle = true,
+    branch = undefined as any[] | undefined,
+    extraSessions = [] as any[],
+    /** Which sessions answer a roll call. The extras stay quiet, the way a child run does. */
+    freeSessions = undefined as string[] | undefined,
+  } = {},
 ) {
   const bus = new EventEmitter();
   const handlers = new Map<string, Array<(e: any, c: any) => any>>();
@@ -36,10 +43,21 @@ function harness(
   const notices: string[] = [];
   let onEvent: (e: any) => void = () => {};
 
+  const peerId = ownId === WORKER_ID ? SUPER_ID : WORKER_ID;
+  const answering = freeSessions ?? [peerId];
+
   const channel = {
     namespace: "test",
     snapshot: () => ({ connected: true, supported: true }),
-    publish: (payload: unknown) => published.push(payload),
+    publish: (payload: any) => {
+      published.push(payload);
+      // The other sessions answer the roll call, which is what /supervise waits for.
+      if (payload?.t === "who") {
+        for (const id of answering) {
+          queueMicrotask(() => onEvent({ type: "message", fromSessionId: id, payload: { t: "here", to: ownId } }));
+        }
+      }
+    },
     commitState: () => {},
     listSessions: async () => [
       // model and contextPct are on the real SessionInfo (pi-intercom/types.ts), pushed by presence.
@@ -415,14 +433,15 @@ test("a loop still gets named after the supervisor compacts, from restored state
   assert.match(again.content[0].text, /says much the same as instruction 1/);
 });
 
-test("subagent sessions are not offered as workers", async () => {
-  // Real ids from wassname's terminal 2026-08-12: pi-subagents registers every child run with the
-  // broker, so /supervise saw "3 other sessions" and refused to pick the one real worker.
-  // Steering a subagent is meaningless anyway, it dies when its task ends.
+test("a session that does not answer the roll call is not offered as a worker", async () => {
+  // Real names from wassname's terminal 2026-08-13: pi-subagents registers every child run with
+  // the broker, so /supervise saw "5 other sessions" and refused to pick the one real worker.
+  // Steering a child run is meaningless anyway, it dies when its task ends.
   const sup = harness(SUPER_ID, {
     extraSessions: [
-      { id: "subagent-worker-5cf604b2-1", pid: 1, name: "subagent-worker-5cf604b2-1", cwd: process.cwd() },
-      { id: "subagent-worker-13e6255a-1", pid: 2, name: "subagent-worker-13e6255a-1", cwd: process.cwd() },
+      { id: "019ff8ac-1", pid: 1, name: "general-purpose#f818354d", cwd: process.cwd() },
+      { id: "019ff8ac-2", pid: 2, name: "general-purpose#18c778eb", cwd: process.cwd() },
+      { id: "019ff807", pid: 3, name: "subagent-chat-019ff807-e4ce-7f4d", cwd: process.cwd() },
     ],
   });
   await sup.start();
@@ -431,7 +450,42 @@ test("subagent sessions are not offered as workers", async () => {
   assert.deepEqual(
     sup.published.filter((p) => p.t === "pair"),
     [{ t: "pair", to: WORKER_ID, goal: "make the results table" }],
-    "the one real session here is the worker, whatever the subagents are doing",
+    "the one session that answered is the worker, whatever the child runs are doing",
+  );
+});
+
+test("a child run stays out of the roll call, so it can never be picked", async () => {
+  process.env.PI_SUBAGENT_CHILD = "1"; // pi-subagents sets this in every session it starts
+  try {
+    const child = harness(WORKER_ID);
+    await child.start();
+    child.deliver(SUPER_ID, { t: "who", to: "*" });
+    await new Promise((r) => setTimeout(r, 5));
+    assert.deepEqual(child.published.filter((p) => p.t === "here"), []);
+  } finally {
+    delete process.env.PI_SUBAGENT_CHILD;
+  }
+});
+
+test("a session already paired stays out of the roll call, and a free one answers", async () => {
+  const worker = harness(WORKER_ID);
+  await worker.start();
+  worker.deliver("session-asking", { t: "who", to: "*" });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(
+    worker.published.filter((p) => p.t === "here"),
+    [{ t: "here", to: "session-asking" }],
+    "free, so it puts itself forward",
+  );
+
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 5));
+  worker.deliver("session-asking", { t: "who", to: "*" });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(
+    worker.published.filter((p) => p.t === "here").length,
+    1,
+    "taken, so a second supervisor is not offered it",
   );
 });
 
@@ -693,17 +747,33 @@ test("naming the worker still works, and the rest of the line is the goal", asyn
   });
 });
 
-test("with two other sessions here, /supervise refuses and lists what it saw", async () => {
+test("with two free sessions here, /supervise refuses and lists what it saw", async () => {
   const sup = harness(SUPER_ID, {
     extraSessions: [{ id: "session-third", pid: 999, name: "other", cwd: process.cwd() }],
+    freeSessions: [WORKER_ID, "session-third"],
   });
   await sup.start();
   await sup.run("supervise", "make the results table");
 
-  assert.deepEqual(sup.published, [], "guessing between two workers is worse than asking");
-  assert.match(sup.notices.join("\n"), /2 other sessions in .*so say which/);
+  assert.deepEqual(sup.published, [{ t: "who", to: "*" }], "guessing between two workers is worse than asking");
+  assert.match(sup.notices.join("\n"), /2 free sessions in .*so say which/);
   assert.match(sup.notices.join("\n"), /Run \/name <something> in the worker/, "the way out, not just the problem");
-  assert.match(sup.notices.join("\n"), /Seen: worker .*, other /, "both, so you can pick one");
+  assert.match(sup.notices.join("\n"), /Free: worker .*, other /, "both, so you can pick one");
+});
+
+test("the sessions that stayed quiet are counted in the refusal, so nothing is hidden", async () => {
+  const sup = harness(SUPER_ID, {
+    extraSessions: [
+      { id: "019ff8ac-1", pid: 1, name: "general-purpose#f818354d", cwd: process.cwd() },
+      { id: "019ff8ac-2", pid: 2, name: "general-purpose#18c778eb", cwd: process.cwd() },
+    ],
+    freeSessions: [],
+  });
+  await sup.start();
+  await sup.run("supervise", "make the results table");
+
+  assert.match(sup.notices.join("\n"), /0 free sessions/);
+  assert.match(sup.notices.join("\n"), /3 more here did not answer/);
 });
 
 test("supervising takes the writing tools away, and stopping gives them back", async () => {
@@ -923,16 +993,18 @@ test("an unacknowledged pair gives up, and a takeover cancels that timer", async
   // armed then fired against the new partner and blamed a session no longer involved.
   t.mock.timers.enable({ apis: ["setTimeout"] });
 
+  // Named with @, so /supervise skips the roll call. Its wait is a real setTimeout, which the
+  // mocked clock here would never fire, and the command would hang instead of pairing.
   const lonely = harness(SUPER_ID);
   await lonely.start();
-  await lonely.run("supervise", "worker"); // nobody will acknowledge
+  await lonely.run("supervise", "@worker"); // nobody will acknowledge
   t.mock.timers.tick(20_000);
   assert.deepEqual(lonely.published.at(-1), { t: "unpair", to: WORKER_ID }, "it must let the worker go");
   assert.match(lonely.notices.join("\n"), /never acknowledged/);
 
   const takenOver = harness(WORKER_ID);
   await takenOver.start();
-  await takenOver.run("supervise", "supervisor"); // arms a timer nobody will answer
+  await takenOver.run("supervise", "@supervisor"); // arms a timer nobody will answer
   takenOver.deliver("session-third", { t: "pair", to: WORKER_ID, goal: "g" });
   await Promise.resolve();
   const sent = takenOver.published.length;

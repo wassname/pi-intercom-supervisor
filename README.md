@@ -25,7 +25,7 @@ the worker, so the role is decided at pairing time and neither session is one un
 worker needs no command, only the extension loaded, and it prints `supervised by <id>: <goal>` so
 you can see which one was picked.
 
-`/supervise` takes the only other session in this directory, so the whole line is the goal. With
+`/supervise` takes the only free session in this directory, so the whole line is the goal. With
 more than one it refuses and lists them, since guessing is worse than asking. Run `/name worker`
 in the one you want and then `/supervise @worker make the table`, or use `@` and the id it printed,
 which is the start of the `pi --session <id>` line in that terminal. The `@` is what keeps a goal
@@ -51,13 +51,22 @@ to its own line for the whole session, unlike a status that shows only during a 
 [@diegopetrucci/pi-oracle](https://www.npmjs.com/package/@diegopetrucci/pi-oracle) uses for its
 runs.
 
-Child runs are skipped, and the test is the process tree: a pi whose parent is another pi did not
-come from you. That covers a `pi-subagents` run, an oracle run, and a pi started from a `bash` call.
-A worker with three subagents made `/supervise` refuse to pick between four sessions, and steering
-one is pointless anyway, because it dies when its task ends. The name is not a reliable test.
-`pi-subagents` sets an id starting `subagent` only when it passes an intercom target; without one
-the child registers under its own session id, and `pi-intercom` then calls it `subagent-chat-<id>`,
-which is its name for any session you have not named.
+With no target named, `/supervise` asks rather than guesses: it broadcasts a roll call and waits
+half a second, and only the sessions that answer are candidates. A session knows things about
+itself that nothing outside it can see, so each one answers for itself. A `pi-subagents` child run
+stays quiet because it reads `PI_SUBAGENT_CHILD` in its own environment, a session already paired
+stays quiet because it is taken, and a registration whose process has gone cannot answer at all.
+The refusal counts the quiet ones so nothing is hidden.
+
+Guessing from the outside is what this replaces, and every version of it was wrong. The name is no
+test: `pi-subagents` sets an id starting `subagent` only when it passes an intercom target, and
+`pi-intercom` calls any unnamed session `subagent-chat-<id>`. The process tree is no test either: a
+child pi is often started through an intermediate `node` process (`pi-subagents`
+`async-execution.ts:459`), which breaks the pi-to-pi parent chain the check looked for. On
+2026-08-13 that left wassname with five child runs offered as workers in one directory.
+
+Naming a target with `@` skips the roll call, because you named it. The pair acknowledgement is
+then the test of whether it can take the job.
 
 Working on this extension: `pi install /path/to/pi-supervise` points pi at the working tree, so
 `/reload` picks up an edit with no commit and no push.
@@ -170,7 +179,8 @@ instructions, and 0 on a paraphrase sharing no words, so it is a floor on repeti
 
 ## Limits
 
-The `done` guard sees child pi processes but not a detached job, a queue or a training run. Between
+The `done` guard sees a child process named `pi` directly under the worker, so it misses a detached
+job, a queue, a training run, and a subagent started through an intermediate `node` process. Between
 looks the supervisor is blind, so two minutes is the worst case for spotting a wrong path. Shorten
 `WATCH_INTERVAL_MS` to pay more for a closer eye. Views are cut to 15 KB, oldest turns first,
 because the broker drops anything over 16 KiB and never tells the extension. The last pair wins and
@@ -179,7 +189,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 76 tests, free apart from a ps call
+npm test                      # 78 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```

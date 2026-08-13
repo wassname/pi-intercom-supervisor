@@ -17,7 +17,7 @@ import { promisify } from "node:util";
 
 const execAsync = promisify(exec);
 
-export interface PiProcess {
+interface PiProcess {
   pid: number;
   ppid: number;
 }
@@ -35,23 +35,4 @@ async function piProcesses(): Promise<PiProcess[]> {
 
 export async function childPiProcesses(): Promise<number[]> {
   return (await piProcesses()).filter((p) => p.ppid === process.pid).map((p) => p.pid);
-}
-
-/**
- * Every pi whose parent is another pi: a pi-subagents run, an oracle run, a pi started from a bash
- * call. They all register with the broker like any session, so /supervise offers them as workers.
- *
- * The process tree is the signal because no naming convention holds. pi-subagents sets the intercom
- * id to "subagent-<agent>-<runId>" only when it passes a target; without one the child registers
- * under its own session id, and pi-intercom then names it "subagent-chat-<id>", which is what it
- * calls any session with no name. Observed 2026-08-12: pid 1741129, parent 447663 (LUCID_worker),
- * offered as a second worker in the same directory.
- */
-export function spawnedPids(processes: PiProcess[]): Set<number> {
-  const all = new Set(processes.map((p) => p.pid));
-  return new Set(processes.filter((p) => all.has(p.ppid)).map((p) => p.pid));
-}
-
-export async function spawnedPiPids(): Promise<Set<number>> {
-  return spawnedPids(await piProcesses());
 }

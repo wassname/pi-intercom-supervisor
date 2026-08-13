@@ -20,7 +20,7 @@ import type {
  */
 const INTERCOM_EXTENSION_REGISTER_EVENT = "intercom:extension-register";
 import { buildView, progressKey, turnsSince } from "./view.ts";
-import { childPiProcesses, spawnedPiPids } from "./subagents.ts";
+import { childPiProcesses } from "./subagents.ts";
 import {
   EMPTY_STATE,
   NAMESPACE,
@@ -70,6 +70,18 @@ const EYE = "\u{1F441}";
 
 /** How long the supervisor waits for the worker to acknowledge a pair before giving up on it. */
 const PAIR_ACK_TIMEOUT_MS = 10_000;
+
+/**
+ * How long /supervise waits for the roll call. One round trip over a local unix socket, so this is
+ * mostly slack for a session busy in the middle of a turn.
+ */
+const ROLL_CALL_MS = 500;
+
+/**
+ * Set in every session pi-subagents starts (pi-args.ts:622, unconditional), so a child run can
+ * recognise itself and stay out of the roll call.
+ */
+const SUBAGENT_ENV = "PI_SUBAGENT_CHILD";
 
 /**
  * How often the supervisor looks at a worker that is still working. It also looks when the worker
@@ -128,6 +140,8 @@ export default function (pi: any) {
   let pairTimer: ReturnType<typeof setTimeout> | undefined;
   /** Supervisor side: the writer tools this session had, so reset gives back exactly those. */
   let removedWriters: string[] = [];
+  /** Supervisor side: who answered the roll call, collected only while /supervise is waiting. */
+  let rollCall: Set<string> | undefined;
 
   /** PI_SUPERVISOR_DEBUG=1 traces the wire to stderr. The channel is invisible in transcripts. */
   const debug = (event: string, detail: unknown = {}) => {
@@ -159,6 +173,28 @@ export default function (pi: any) {
   function send(message: Wire) {
     if (!channel) throw new Error("intercom-supervisor: intercom channel is not ready");
     channel.publish(message, { audience: "capable" });
+  }
+
+  /**
+   * Ask every session whether it can be supervised, and collect the ones that say yes.
+   *
+   * The broker roster is not the candidate list. It carries child runs from pi-subagents, sessions
+   * that do not load this extension, sessions already paired, and registrations whose process has
+   * gone. Observed 2026-08-13: five of them at once in one directory, and /supervise refused to
+   * pick between them because every filter here worked by guessing from the outside.
+   *
+   * Each session knows its own answer, so it gives it. A child run reads SUBAGENT_ENV in its own
+   * environment; a paired one knows it is paired; a dead one cannot answer at all. No process tree,
+   * no naming convention.
+   */
+  async function askWhoIsFree(): Promise<Set<string>> {
+    const found = new Set<string>();
+    rollCall = found;
+    send({ t: "who", to: "*" });
+    await new Promise((resolve) => setTimeout(resolve, ROLL_CALL_MS));
+    rollCall = undefined;
+    debug("roll call", { answered: [...found].map((id) => id.slice(0, 8)) });
+    return found;
   }
 
   /**
@@ -277,7 +313,19 @@ export default function (pi: any) {
   async function onWire(from: string, wire: Wire) {
     const me = await resolveOwnId();
     debug("wire in", { t: wire.t, from: from.slice(0, 8), forUs: wire.to === me, role: state.role });
+
+    // Answered before the addressed-to-us check below, because a roll call goes to everyone.
+    if (wire.t === "who") {
+      if (from !== me && state.role === "none" && !process.env[SUBAGENT_ENV]) send({ t: "here", to: from });
+      return;
+    }
     if (wire.to !== me) return;
+
+    // Collected only while /supervise is waiting, so a late answer lands nowhere and is dropped.
+    if (wire.t === "here") {
+      rollCall?.add(from);
+      return;
+    }
 
     if (wire.t === "pair") {
       // Last pair wins. First-wins left a worker bound forever to a supervisor that had died, and
@@ -511,15 +559,11 @@ export default function (pi: any) {
       }
 
       const me = await resolveOwnId();
-      // Child runs are not workers: they die when their task ends, so steering one is meaningless.
-      // Two ways to spot them, because neither catches all. pi-subagents sets an id starting
-      // "subagent" when it passes an intercom target, and every child pi has a pi for a parent.
-      const spawned = await spawnedPiPids();
-      const others = (await channel.listSessions())
-        .filter((s: any) => s.id !== me && !s.id.startsWith("subagent") && !spawned.has(s.pid));
+      const listed = (await channel.listSessions()).filter((s: any) => s.id !== me);
       // The id prefix is the start of the "pi --session <id>" line pi prints in every terminal at
       // startup, so it is something you can match against a window.
-      const seen = others.map((s: any) => `${s.name ?? "(unnamed)"} ${s.id.slice(0, 8)} in ${s.cwd}`).join(", ");
+      const describe = (rows: any[]) =>
+        rows.map((s: any) => `${s.name ?? "(unnamed)"} ${s.id.slice(0, 8)} in ${s.cwd}`).join(", ") || "none";
       const [first, ...rest] = text.split(/\s+/);
 
       // A target is written @name, so nothing has to be guessed from a goal that has spaces in it.
@@ -528,11 +572,13 @@ export default function (pi: any) {
       let worker: any;
       let goal: string;
       if (first.startsWith("@")) {
+        // Matched against every session, and no roll call: you named it, so it is the target, and
+        // the pair acknowledgement below is the test of whether it can take the job.
         const want = first.slice(1);
-        const match = others.filter((s: any) => s.name === want || s.id === want || s.id.startsWith(want));
+        const match = listed.filter((s: any) => s.name === want || s.id === want || s.id.startsWith(want));
         if (match.length !== 1) {
           context.ui?.notify?.(
-            `intercom-supervisor: ${match.length} sessions match @${want}. Seen: ${seen || "none"}`,
+            `intercom-supervisor: ${match.length} sessions match @${want}. Seen: ${describe(listed)}`,
             "error",
           );
           return;
@@ -540,19 +586,24 @@ export default function (pi: any) {
         worker = match[0];
         goal = rest.join(" ");
       } else {
-        // No target named, so the only other session in this directory is the worker and the whole
-        // line is the goal.
-        const here = others.filter((s: any) => s.cwd === context.cwd);
-        if (here.length !== 1) {
+        // Nothing named, so the one free session in this directory is the worker and the whole line
+        // is the goal. Free means it answered the roll call, which is the only reliable test: the
+        // roster also holds child runs, paired sessions and registrations whose process is gone.
+        const free = await askWhoIsFree();
+        const here = listed.filter((s: any) => s.cwd === context.cwd);
+        const open = here.filter((s: any) => free.has(s.id));
+        const quiet = here.length - open.length;
+        if (open.length !== 1) {
           context.ui?.notify?.(
-            `intercom-supervisor: ${here.length} other sessions in ${context.cwd}, so say which. `
+            `intercom-supervisor: ${open.length} free sessions in ${context.cwd}, so say which. `
             + `Run /name <something> in the worker, then /supervise @<something> <goal>, or use @<id>. `
-            + `Seen: ${seen || "none"}`,
+            + `Free: ${describe(open)}.`
+            + (quiet ? ` ${quiet} more here did not answer: child runs, already paired, gone, or no extension.` : ""),
             "error",
           );
           return;
         }
-        worker = here[0];
+        worker = open[0];
         goal = text;
       }
       const target = worker.name ?? worker.id.slice(0, 8);
