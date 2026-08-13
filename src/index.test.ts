@@ -31,6 +31,8 @@ function harness(
     extraSessions = [] as any[],
     /** Which sessions answer a roll call. The extras stay quiet, the way a child run does. */
     freeSessions = undefined as string[] | undefined,
+    /** Which option the human picks when /supervise has to ask. undefined is a cancelled dialog. */
+    pick = undefined as number | undefined,
   } = {},
 ) {
   const bus = new EventEmitter();
@@ -41,6 +43,7 @@ function harness(
   const userMessages: Array<{ content: string; options?: any }> = [];
   const published: any[] = [];
   const notices: string[] = [];
+  const selects: Array<{ title: string; options: string[] }> = [];
   let onEvent: (e: any) => void = () => {};
 
   const peerId = ownId === WORKER_ID ? SUPER_ID : WORKER_ID;
@@ -113,6 +116,11 @@ function harness(
     hasUI: true,
     ui: {
       notify: (m: string) => notices.push(m),
+      // pi's own ExtensionUIContext.select: returns the chosen option, or undefined if cancelled.
+      select: async (title: string, options: string[]) => {
+        selects.push({ title, options });
+        return pick === undefined ? undefined : options[pick];
+      },
       // Same shape as @diegopetrucci/pi-oracle uses: setStatus(id, text) with theme.fg for colour.
       setStatus: (id: string, text: string | undefined) => status.set(id, text),
       theme: { fg: (_colour: string, text: string) => text },
@@ -133,6 +141,7 @@ function harness(
     userMessages,
     published,
     notices,
+    selects,
     status,
     async start() {
       extension(pi as any);
@@ -747,7 +756,44 @@ test("naming the worker still works, and the rest of the line is the goal", asyn
   });
 });
 
-test("with two free sessions here, /supervise refuses and lists what it saw", async () => {
+test("with two free sessions here, /supervise asks which one, and pairs with the choice", async () => {
+  const sup = harness(SUPER_ID, {
+    extraSessions: [{ id: "session-third", pid: 999, name: "other", cwd: process.cwd() }],
+    freeSessions: [WORKER_ID, "session-third"],
+    pick: 1,
+  });
+  await sup.start();
+  await sup.run("supervise", "make the results table");
+
+  assert.equal(sup.selects.length, 1, "guessing between two workers is worse than asking");
+  assert.match(sup.selects[0].title, /make the results table/, "the goal, so you know what you are picking for");
+  assert.deepEqual(sup.selects[0].options.length, 2);
+  assert.deepEqual(
+    sup.published.filter((p) => p.t === "pair"),
+    [{ t: "pair", to: "session-third", goal: "make the results table" }],
+  );
+});
+
+test("a session that stayed quiet is still on the list, because 0 free is a dead end", async () => {
+  // Live 2026-08-13: five child runs answered nothing and the worker had not been reloaded, so a
+  // roll call alone left wassname with "0 free sessions" and no way through.
+  const sup = harness(SUPER_ID, {
+    extraSessions: [
+      { id: "019ff8ac-1", pid: 1, name: "general-purpose#f818354d", cwd: process.cwd() },
+      { id: "019ff8ac-2", pid: 2, name: "general-purpose#18c778eb", cwd: process.cwd() },
+    ],
+    freeSessions: [],
+    pick: 0,
+  });
+  await sup.start();
+  await sup.run("supervise", "make the results table");
+
+  assert.equal(sup.selects[0].options.length, 3, "everything here, so nothing is hidden");
+  assert.match(sup.selects[0].options[0], /no answer/, "and marked, so the odd ones look odd");
+  assert.equal(sup.published.filter((p) => p.t === "pair").length, 1, "the pick is honoured");
+});
+
+test("a cancelled picker pairs with nothing", async () => {
   const sup = harness(SUPER_ID, {
     extraSessions: [{ id: "session-third", pid: 999, name: "other", cwd: process.cwd() }],
     freeSessions: [WORKER_ID, "session-third"],
@@ -755,25 +801,7 @@ test("with two free sessions here, /supervise refuses and lists what it saw", as
   await sup.start();
   await sup.run("supervise", "make the results table");
 
-  assert.deepEqual(sup.published, [{ t: "who", to: "*" }], "guessing between two workers is worse than asking");
-  assert.match(sup.notices.join("\n"), /2 free sessions in .*so say which/);
-  assert.match(sup.notices.join("\n"), /Run \/name <something> in the worker/, "the way out, not just the problem");
-  assert.match(sup.notices.join("\n"), /Free: worker .*, other /, "both, so you can pick one");
-});
-
-test("the sessions that stayed quiet are counted in the refusal, so nothing is hidden", async () => {
-  const sup = harness(SUPER_ID, {
-    extraSessions: [
-      { id: "019ff8ac-1", pid: 1, name: "general-purpose#f818354d", cwd: process.cwd() },
-      { id: "019ff8ac-2", pid: 2, name: "general-purpose#18c778eb", cwd: process.cwd() },
-    ],
-    freeSessions: [],
-  });
-  await sup.start();
-  await sup.run("supervise", "make the results table");
-
-  assert.match(sup.notices.join("\n"), /0 free sessions/);
-  assert.match(sup.notices.join("\n"), /3 more here did not answer/);
+  assert.deepEqual(sup.published.filter((p) => p.t === "pair"), []);
 });
 
 test("supervising takes the writing tools away, and stopping gives them back", async () => {

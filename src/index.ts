@@ -586,24 +586,31 @@ export default function (pi: any) {
         worker = match[0];
         goal = rest.join(" ");
       } else {
-        // Nothing named, so the one free session in this directory is the worker and the whole line
-        // is the goal. Free means it answered the roll call, which is the only reliable test: the
-        // roster also holds child runs, paired sessions and registrations whose process is gone.
-        const free = await askWhoIsFree();
+        // Nothing named, so the whole line is the goal and this has to find the worker.
         const here = listed.filter((s: any) => s.cwd === context.cwd);
-        const open = here.filter((s: any) => free.has(s.id));
-        const quiet = here.length - open.length;
-        if (open.length !== 1) {
-          context.ui?.notify?.(
-            `intercom-supervisor: ${open.length} free sessions in ${context.cwd}, so say which. `
-            + `Run /name <something> in the worker, then /supervise @<something> <goal>, or use @<id>. `
-            + `Free: ${describe(open)}.`
-            + (quiet ? ` ${quiet} more here did not answer: child runs, already paired, gone, or no extension.` : ""),
-            "error",
-          );
+        if (!here.length) {
+          context.ui?.notify?.(`intercom-supervisor: no other session in ${context.cwd}`, "error");
           return;
         }
-        worker = open[0];
+        // The roll call answers who can actually take the job. One free session is the ordinary
+        // case, and it pairs with no question asked.
+        const free = await askWhoIsFree();
+        const open = here.filter((s: any) => free.has(s.id));
+        if (open.length === 1) {
+          worker = open[0];
+        } else {
+          // Otherwise you pick. Everything here is on the list, including the sessions that stayed
+          // quiet, because "0 free sessions" is a dead end and a quiet session is sometimes the one
+          // you want: a worker that has not been reloaded since this extension changed cannot
+          // answer a roll call it does not know about.
+          const ordered = [...open, ...here.filter((s: any) => !free.has(s.id))];
+          const labels = ordered.map(
+            (s: any) => `${s.name ?? "(unnamed)"} ${s.id.slice(0, 8)}${free.has(s.id) ? "" : "  (no answer: child run, paired, gone, or not reloaded)"}`,
+          );
+          const picked = await context.ui.select(`which session works on: ${text}`, labels);
+          if (picked === undefined) return; // cancelled, and the notice would say nothing new
+          worker = ordered[labels.indexOf(picked)];
+        }
         goal = text;
       }
       const target = worker.name ?? worker.id.slice(0, 8);

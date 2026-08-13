@@ -26,7 +26,7 @@ worker needs no command, only the extension loaded, and it prints `supervised by
 you can see which one was picked.
 
 `/supervise` takes the only free session in this directory, so the whole line is the goal. With
-more than one it refuses and lists them, since guessing is worse than asking. Run `/name worker`
+more than one it shows a picker, since guessing is worse than asking. Run `/name worker`
 in the one you want and then `/supervise @worker make the table`, or use `@` and the id it printed,
 which is the start of the `pi --session <id>` line in that terminal. The `@` is what keeps a goal
 with spaces in it out of the target: a first word that names no session is refused, where it used
@@ -52,11 +52,16 @@ to its own line for the whole session, unlike a status that shows only during a 
 runs.
 
 With no target named, `/supervise` asks rather than guesses: it broadcasts a roll call and waits
-half a second, and only the sessions that answer are candidates. A session knows things about
-itself that nothing outside it can see, so each one answers for itself. A `pi-subagents` child run
-stays quiet because it reads `PI_SUBAGENT_CHILD` in its own environment, a session already paired
-stays quiet because it is taken, and a registration whose process has gone cannot answer at all.
-The refusal counts the quiet ones so nothing is hidden.
+half a second. A session knows things about itself that nothing outside it can see, so each one
+answers for itself. A `pi-subagents` child run stays quiet because it reads `PI_SUBAGENT_CHILD` in
+its own environment, a session already paired stays quiet because it is taken, and a registration
+whose process has gone cannot answer at all.
+
+One session answering is the ordinary case and it pairs with no question asked. Otherwise you get a
+picker, and every session in the directory is on it, including the quiet ones, marked. Excluding
+them outright reads as `0 free sessions` and leaves you nowhere, which is what happened the first
+time this shipped: the worker was running an older copy of this extension and could not answer a
+roll call it had never heard of.
 
 Guessing from the outside is what this replaces, and every version of it was wrong. The name is no
 test: `pi-subagents` sets an id starting `subagent` only when it passes an intercom target, and
@@ -189,7 +194,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 78 tests, free apart from a ps call
+npm test                      # 79 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```
