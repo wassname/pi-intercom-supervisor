@@ -9,7 +9,7 @@ hidden in-memory session. This runs it as a second real pi session and uses
 [pi-intercom](https://github.com/tintinweb/pi-intercom) as the wire between the two. You can see the
 supervisor, talk to it, and bridge it to your phone with any chat extension, because it is just a pi
 session. That swap deleted the context pipeline, the four reframe tiers, the JSON verdict parser,
-the widget and the plugin API: 5201 lines of `src` down to 788.
+the widget and the plugin API: 5201 lines of `src` down to 1712, tests excluded on both sides.
 
 ```
 pi install https://github.com/wassname/pi-intercom-supervisor   # needs npm:pi-intercom too
@@ -72,8 +72,8 @@ Guessing from the outside is what this replaces, and every version of it was wro
 test: `pi-subagents` sets an id starting `subagent` only when it passes an intercom target, and
 `pi-intercom` calls any unnamed session `subagent-chat-<id>`. The process tree is no test either: a
 child pi is often started through an intermediate `node` process (`pi-subagents`
-`async-execution.ts:459`), which breaks the pi-to-pi parent chain the check looked for. On
-2026-08-13 that left wassname with five child runs offered as workers in one directory.
+`async-execution.ts:459`), which breaks the pi-to-pi parent chain the check looked for. That left
+five child runs offered as workers in one directory.
 
 Naming a target with `@` skips the roll call, because you named it. The pair acknowledgement is
 then the test of whether it can take the job.
@@ -124,7 +124,7 @@ by rewriting them as text before compiling. They stay where they happened, next 
 each one produced, because that is the order you read a session in. A worker going in circles says
 so there first, while it names the approach it is about to retry, before any file or commit
 changes. Two, cut to the last 400 characters each: one worker session here held 161 reasoning
-blocks, and all of them would make the view a second transcript.
+blocks, and all of them together would be a second transcript.
 
 The goal is never cut. Cutting it at 300 characters ended a real goal mid-word, and a supervisor
 cannot judge against half a sentence. The byte limit trims the transcript instead, which is the
@@ -141,32 +141,30 @@ connected and then says which it is: still supervising, or dropped because the o
 gone. A resumed supervisor also has its writing tools taken off again, which the `/supervise`
 handler alone would not do.
 
-The worker sends a view when it is paired, again whenever it stops, and every half hour while a
-turn runs. The pairing one exists because the supervisor's opening turn would otherwise have
-nothing to read, and a supervisor with nothing to read still answers: on 2026-08-13 one called
-`let_it_run` 98 times in a single turn, once every two seconds, each time over "waiting for the
-first view". A worker paired while it sits at the prompt never settles, so waiting for the first
-stop can mean waiting for ever.
+The worker sends a view when it is paired, again whenever it stops, and every half hour in between.
+The pairing one exists because a worker paired while it sits at the prompt never settles, so waiting
+for its first stop can mean waiting for ever.
 
 Only the view starts a supervisor turn. The brief, the reanchor after a reload and a goal change
 all say "a view follows", so none of them is a thing to judge, and each goes in as a custom message
-with `triggerTurn: false` (`pi-coding-agent/core/agent-session.d.ts:343`). They are in the context
+with `triggerTurn: false` (`pi-coding-agent/core/agent-session.d.ts:398`). They are in the context
 and they start nothing. As a user message the brief was a turn, and a supervisor holding three
-verdict tools with no view in front of it answered it: 98 times in the worst case, and twice more
-after the brief was reworded to ask for no answer at all. The turn should not have existed.
+verdict tools and no view still answers it: 98 `let_it_run` calls in one turn, once every two
+seconds, each over "waiting for the first view". No wording fixed that, because the turn should not
+have existed.
 
-A `let_it_run` result has to name a way to end the turn. It used to end "Say nothing more until the
-next view arrives", which is the one thing a model cannot do: a turn ends when the assistant writes
-text and calls no tool, so forbidding text left only another tool call. Session 019ffa73 shows the
-result on all fifteen looks, a true reason ("job 23 progressing normally, 438/600 steps"), then a
-second true reason two seconds later ("waiting for job 23 to reach Evidence-b"). A second call in
-one look is now answered, saying the verdict is already recorded and naming the way out. It is not
-an error, because nothing happened: `let_it_run` reaches nobody.
+Every verdict result has to name a way to end the turn. A turn ends when the assistant writes text
+and calls no tool, so a result that does not say so leaves another tool call as the only move, and
+one that forbids text ("Say nothing more until the next view arrives") forbids the exit outright.
+That cost a spare verdict on every look of an overnight run: a true reason ("job 23 progressing
+normally, 438/600 steps"), then a second true reason two seconds later. A second `let_it_run` in one
+look is answered rather than cut, saying the verdict is already recorded and naming the way out. It
+is not an error, because nothing happened: `let_it_run` reaches nobody.
 
 A runaway is still cut with pi's own `ctx.abort()`, past five verdicts in one look, which no
-sign-off explains and session 019ffa5f reached 645 of. Words in a tool result cannot stop a loop,
+sign-off explains and one run reached 645 of. Words in a tool result cannot stop a loop,
 because the loop is what reads them. The result is still recorded, since the agent loop pushes tool
-results before it streams the next assistant message (`pi-agent-core/agent-loop.js:115-119`). "One
+results before it streams the next assistant message (`pi-agent-core/agent-loop.js:124-129`). "One
 look" means one view: the count resets when a view arrives as well as on `agent_start`, because a
 view that lands while the supervisor is busy is queued as a follow up, and a follow up runs inside
 the agent loop already going, so `agent_start` does not fire again.
@@ -223,39 +221,33 @@ nothing, and most of what it reads is a cache hit at $0.004/Mtok against $0.44 f
 
 So the reason to keep its context short is not the bill, it is that a model judging one view should
 not read 234k tokens to do it. Before each call, a look older than the last three loses its view
-body and its thinking, and keeps its verdict. The verdicts are the running notes and they are 7% of
-the characters. On that session it holds the context near 25k instead of climbing to 184k, 82% off
-at the last look. `npx tsx scripts/measure-prune.ts <session.jsonl>` replays a real session and
-prints the table.
+body and its thinking, and keeps its verdict. The verdicts are the supervisor's running notes on the
+worker and they are 7% of the characters; the stale views and thinking are 88%. On that session the
+pruner holds the context near 25k instead of climbing, 82% off at the last look.
+`npx tsx scripts/measure-prune.ts <session.jsonl>` replays a real session and prints the table.
 
 The other saving is not asking at all. A timer look at a worker that has done nothing since the last
-look shows the supervisor a view it has already read, and 13 of that session's 92 verdicts were
-exactly that: "check-in with no new turns; worker still working, no evidence of trouble". Those looks
-are now skipped, comparing the view without its status line, which carries a clock. After three
-skips one goes out anyway, because a worker that has not moved in two hours is itself worth seeing.
+look shows the supervisor a view it has already read, which was 13 of that session's 92 verdicts.
+Those looks are skipped, comparing the view without its status line, which carries a clock. After
+three skips one goes out anyway, because a worker that has not moved in two hours is worth seeing.
 
 A stopped worker is the exception: it is always reported, and the timer keeps running for it. The
-timer used to stop when the worker did, since a stopped worker cannot change. On 2026-08-14 the
-worker stopped at 02:02:18Z, the supervisor answered `let_it_run` "waiting for the worker to
-re-queue in the main group", and the pairing went silent for two and a half hours until wassname
-typed "why stop". Nothing was going to re-queue: `let_it_run` means do nothing, which is what a
-stopped worker already does, and with the timer off nothing was left to raise it. The result of
-`let_it_run` now says that in words when the view reported a stop.
+timer used to stop when the worker did, on the reasoning that a stopped worker cannot change. That
+is true and beside the point, since a stopped worker is the state an instruction is for. It cost one
+run two and a half hours of silence, `let_it_run` on a stopped worker with nothing left to raise it
+again, so the result of `let_it_run` now says in words that a stopped worker stays stopped.
 
-Two things came out of that morning. The supervisor's stated reason was "human is actively
-directing", and a human message is not a handover: they say a word and go to bed, and the worker
-stays stopped. So the brief, the stopped nudge and the `let_it_run` description all say that the
-human being present is never the reason, because they stop the supervisor themselves when they want
-it stopped. And every status line now carries `no new turn for 2h27m`, measured from the worker's own
-last session entry rather than from the last look. One clock covers both ways of being stuck, sitting
-at the prompt and hanging inside a command that never returns, and it is the number the supervisor is
-told to read before deciding.
+Nor is a human message in the worker a handover. They say a word and go to bed, so the brief, the
+stopped nudge and the `let_it_run` description all say that the human being present is never a
+reason to stand back. Every status line carries `no new turn for 2h27m`, measured from the worker's
+last session entry, which covers both sitting at the prompt and hanging inside a command that never
+returns. `RESEARCH_JOURNAL.md` has the sessions these came out of.
 
 ## Limits
 
 The `done` guard sees a child process named `pi` directly under the worker, so it misses a detached
 job, a queue, a training run, and a subagent started through an intermediate `node` process. Between
-looks the supervisor is blind, so two minutes is the worst case for spotting a wrong path. Shorten
+looks the supervisor is blind, so half an hour is the worst case for spotting a wrong path. Shorten
 `WATCH_INTERVAL_MS` to pay more for a closer eye. Views are cut to 15 KB, oldest turns first,
 because the broker drops anything over 16 KiB and never tells the extension. The last pair wins and
 nothing authenticates it. The stagnation count lives in memory and restarts with the worker.

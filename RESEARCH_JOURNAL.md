@@ -128,3 +128,78 @@ instruction and a rewording of it is about 0.44, against under 0.2 for two diffe
 and 0 for a paraphrase sharing no vocabulary, so the 0.4 warning threshold is a floor on repetition
 and not a bound. The whole loop now rests on evidence the supervisor can see rather than on rules
 that stop it, which is the shape wassname asked for.
+
+## 2026-08-14 -- one fact about how a turn ends caused four separate defects
+
+wassname ran the pairing overnight, supervisor session `019ffa73` and worker session `019ff807`,
+sixteen hours on deepseek-v4-pro both sides, and asked me to audit it. The pairing worked: 23 steers
+all landed in the worker as role `user`, and the supervisor's judgement was better than I expected
+it to be. It pushed cheap CPU tests ahead of 40 minute GPU runs, it accepted being overruled by the
+worker's own data ("worker ran a clean sensitivity sweep and chose dyn_d=0.01 ... over my 0.1
+suggestion"), it caught the worker ignoring wassname ("The human asked "collinear?" and you have not
+answered, this is the third time"), and it refused to call the goal met at a milestone that looked
+like one. Goal C in the plan asked for a real overnight run to see whether its judgement was any
+good, and this is the evidence for it.
+
+The four defects I found all trace to a single fact about pi, and I record it here because I did not
+know it when I wrote the prompts. A turn ends only when the assistant writes text and calls no tool.
+A tool result therefore reads as a prompt to act again, and a result that does not name the exit
+leaves another tool call as the only move the model has. Each defect below is that fact meeting a
+different piece of wording.
+
+The `let_it_run` result used to end "Say nothing more until the next view arrives", which forbids
+the exit outright. Session `019ffa73` answered with a second `let_it_run` and aborted on it sixteen
+times before 11:05Z, which is every look in that window. The second call is a sign-off, not a loop: the first
+reason is true ("job 23 progressing normally, 438/600 steps") and so is the second two seconds later
+("waiting for job 23 to reach Evidence-b"). I fixed the wording, and the `steer` result then showed
+the same shape for the same reason, a spare `let_it_run` on 22 of 22 steers in the fifteen hours
+after. Both results now carry an explicit `END_TURN`. Honest note against my own fix: at 04:29:43Z,
+with the new `STEER_ACK` live, the supervisor still called a spare `let_it_run` and read "Already
+recorded". So naming the exit reduced this rather than removing it.
+
+Two measurements from that session are worth keeping. Cost: the worker spent $16.11 over 789 model
+calls and the supervisor $0.38 over 182, about 40x less, because the supervisor reads a lot, writes
+almost nothing, and most of what it reads is a cache hit at $0.004/Mtok against $0.44/Mtok for fresh
+input. That is what makes a frontier model affordable on the watching side. Context: it grew 37.9k
+to 234.7k tokens with zero compactions, and by character count the last look was 56% stale view
+bodies and 32% stale thinking against 7% its own verdicts. The verdicts are the part worth keeping,
+because they are already the supervisor's running notes on the worker, e.g. "job 26 Evidence-b
+partially landed: post rho 0.726 > prompted 0.718 (was tied before rebuild), probe d flipped
++0.059". Pruning the rest before each model call holds the context near 25k on a replay of that same
+session, 82% off at the last look. `scripts/measure-prune.ts` runs the replay so the number is
+measured rather than asserted.
+
+The fourth defect was mine, and it is the one that cost wassname his morning. `agent_settled` ran
+`clearInterval(watchTimer)` with the comment "the worker stopped, so there is nothing to watch until
+it starts again". The reasoning is wrong in a way I still find slightly startling: a stopped worker
+cannot change, so watching it looks pointless, but a stopped worker is exactly the state that needs
+an instruction. On 2026-08-14 the worker's last message was 02:02:18Z and the next entry in that
+session is wassname typing "why stop" at 04:29:14Z, 2h27m later. The supervisor saw the stop one
+second after it happened and answered `let_it_run`, "human is actively directing ... Waiting for the
+worker to re-queue in the main group". Nothing was going to re-queue. `let_it_run` means do nothing,
+doing nothing is what a stopped worker does, and with the timer off there was no third thing left to
+wake either side.
+
+wassname corrected my reading of that reason, and the correction is the useful part. I had treated
+"human is actively directing" as sensible; he said "err no if I send a message it doesn't mean the
+supervisor should stop, I will stop them if I need to". A human message is not a handover. He says a
+word and goes to bed, and the worker stays stopped with nobody driving it, which is the precise
+state the supervisor exists for. The stand-down is now denied in three places, one of which is the
+`let_it_run` tool description, because that is the only one of the three a supervisor compaction
+cannot lose.
+
+He also asked for a wall-clock measure: "maybe it should go after N minute with not turned, and be
+clear there have been no turns for this long, is it stuck". The status line used to carry seconds
+since the last look, which measures the supervisor rather than the worker and understates a worker
+that stopped hours before anyone looked. It now carries `sinceLastTurn()`, measured from the
+worker's own last session entry. One number covers both ways of being stuck, sitting at the prompt
+and hanging inside a command that never returns, since neither writes an entry. It lives in the
+status line rather than a new header line because `bodyOf` strips that line, so a clock that moves
+on its own cannot defeat the unchanged-view skip.
+
+Two smaller things I would tell a later reader. The session jsonl timestamps are UTC and this
+machine is AWST, so a session that looks eight hours stale is current; I nearly reported a live
+pairing as dead over it. And `errorMessage` lives at `.message.errorMessage`, not `.errorMessage`,
+so my first jq pass returned zero aborts for a session that a raw `grep -c aborted` put at sixteen.
+Both are the same failure: an empty result from a query I had not validated, read as a fact about
+the world.
