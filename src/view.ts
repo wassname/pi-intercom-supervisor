@@ -34,9 +34,31 @@ export interface AgentMsg {
 export interface Entry {
   type: string;
   message?: AgentMsg;
+  /** ISO, written on every entry by the session manager (core/session-manager.d.ts:21). */
+  timestamp?: string;
   /** Written by whichever compactor the worker runs. VCC's summary lands here too. */
   summary?: string;
   tokensBefore?: number;
+}
+
+/**
+ * Milliseconds since the worker last put a message in its session.
+ *
+ * The clock a stuck worker shows on, and the only one that reads the same for both ways of being
+ * stuck: sitting at the prompt, and inside one command that never returns. Time since the last
+ * look measures the supervisor instead, and understates a worker that stopped hours before.
+ */
+export function sinceLastTurn(entries: Entry[], now = Date.now()): number {
+  const last = [...entries].reverse().find((e) => e.type === "message" && e.timestamp);
+  return last ? now - Date.parse(last.timestamp!) : 0;
+}
+
+/** A duration a supervisor can read at a glance: 2h27m, 45m, 30s. */
+export function age(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
 }
 
 /** Extension channel payloads cap at 16 KiB, so the view must stay under it. */

@@ -21,7 +21,7 @@ import type {
  * src/index.test.ts imports the real constant, so a rename in pi-intercom fails a test here.
  */
 const INTERCOM_EXTENSION_REGISTER_EVENT = "intercom:extension-register";
-import { buildView, progressKey, turnsSince } from "./view.ts";
+import { age, buildView, progressKey, sinceLastTurn, turnsSince } from "./view.ts";
 import { childPiProcesses } from "./subagents.ts";
 import {
   EMPTY_STATE,
@@ -169,10 +169,9 @@ export default function (pi: any) {
   let staleReviews = 0;
   /** Worker side: how many turns the supervisor has already been sent, so views carry only the new ones. */
   let sentTurns = 0;
-  /** Worker side: the routine look while a turn runs, and when the last view of any kind went out. */
+  /** Worker side: the routine look, and when the last view of any kind went out. */
   let watchTimer: ReturnType<typeof setInterval> | undefined;
   let lastLook = 0;
-  let turnStartedAt = 0;
   /** Worker side: the last view sent, less its status line, and how many timer looks matched it. */
   let lastViewBody = "";
   let looksSkipped = 0;
@@ -553,9 +552,12 @@ export default function (pi: any) {
     // Asked at pairing and on a rejoin, and the worker is often sitting at the prompt then. Saying
     // "working" there sends the supervisor a check-in nudge about a worker that is waiting on it.
     const idle = context.isIdle();
+    // One clock for both ways of being stuck: at the prompt, and inside a command that never
+    // returns. It goes in the status line because bodyOf strips that line, so a number that moves
+    // on its own cannot defeat the unchanged-view skip below.
     const view = buildView({
       goal: state.goal,
-      status: `${idle ? "idle" : "working"}, ${why}`,
+      status: `${idle ? "stopped" : "working"}, ${why}, no new turn for ${age(sinceLastTurn(entries))}`,
       entries,
       since,
       subagents,
@@ -604,13 +606,10 @@ export default function (pi: any) {
       // A stopped worker is always reported, never skipped as unchanged: an unchanged stopped worker
       // is the state that needs a steer, and nothing else is going to bring it up.
       const idle = ctx.isIdle();
-      const secs = Math.round((Date.now() - (idle ? lastLook : turnStartedAt)) / 1000);
-      const why = idle ? `still stopped, ${secs}s since the last look` : `routine check in, ${secs}s into this turn`;
-      publishView(ctx, why, sentTurns, !idle).catch((err: Error) => {
+      publishView(ctx, idle ? "looked at again" : "routine check in", sentTurns, !idle).catch((err: Error) => {
         debug("timer look failed", { error: err.message });
       });
     }, WATCH_POLL_MS);
-    turnStartedAt = Date.now();
   });
 
   /** Fires only when no retry, compaction, or queued continuation will run, so the worker is truly done. */
@@ -631,7 +630,7 @@ export default function (pi: any) {
       lastProgress = progress;
       const view = buildView({
         goal: state.goal,
-        status: "idle",
+        status: "stopped, just now, no new turn for 0s",
         entries,
         since: sentTurns,
         stale: staleReviews,

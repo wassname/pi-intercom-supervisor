@@ -242,6 +242,15 @@ typed "why stop". Nothing was going to re-queue: `let_it_run` means do nothing, 
 stopped worker already does, and with the timer off nothing was left to raise it. The result of
 `let_it_run` now says that in words when the view reported a stop.
 
+Two things came out of that morning. The supervisor's stated reason was "human is actively
+directing", and a human message is not a handover: they say a word and go to bed, and the worker
+stays stopped. So the brief, the stopped nudge and the `let_it_run` description all say that the
+human being present is never the reason, because they stop the supervisor themselves when they want
+it stopped. And every status line now carries `no new turn for 2h27m`, measured from the worker's own
+last session entry rather than from the last look. One clock covers both ways of being stuck, sitting
+at the prompt and hanging inside a command that never returns, and it is the number the supervisor is
+told to read before deciding.
+
 ## Limits
 
 The `done` guard sees a child process named `pi` directly under the worker, so it misses a detached
@@ -254,7 +263,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 91 tests, free apart from a ps call
+npm test                      # 93 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```

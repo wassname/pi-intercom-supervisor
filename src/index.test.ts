@@ -1209,7 +1209,7 @@ test("the supervisor gets a look at a working worker every half hour, without be
   const views = worker.published.filter((p) => p.t === "view").slice(atPairing);
   assert.equal(views.length, 1, "past half an hour the supervisor gets a look");
   assert.equal(views[0].stopped, false, "this worker is mid-turn, so it is a check in");
-  assert.match(views[0].view, /status: working, routine check in, \d+s into this turn/);
+  assert.match(views[0].view, /status: working, routine check in, no new turn for \d+[smh]/);
   // A look that forgets the subagent line reports "none" and unblocks done while one is running.
   assert.match(views[0].view, /^child pi processes still running: /m);
 
@@ -1218,6 +1218,24 @@ test("the supervisor gets a look at a working worker every half hour, without be
   t.mock.timers.tick(600_000);
   await new Promise((r) => setTimeout(r, 300)); // let any look that did start finish, so it counts
   assert.equal(worker.published.filter((p) => p.t === "view").length, after, "ten minutes is still too early");
+});
+
+test("a human message in the worker session is not a reason to stand back", async () => {
+  // The reason the supervisor gave for the 2h27m silence was "human is actively directing".
+  // wassname: "err no if I send a message it doesn't mean the supervisor should stop, I will stop
+  // them if I need to". So this must be said in both places: the brief, and the let_it_run
+  // description, which is the only one of the two that survives a supervisor compaction.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "@worker make the results table");
+
+  assert.match(sup.contextMessages.at(-1)!.content, /not a handover, and it is not a reason to stand back/);
+  assert.match(sup.tools.get("let_it_run")!.description, /human being present is never the reason/);
+
+  // And on the view that carries a stopped worker, where the excuse actually got used.
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "worker view", stopped: true });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.match(sup.userMessages[0].content, /human being present does not count as somebody driving it/);
 });
 
 test("letting a stopped worker run says plainly that the worker stays stopped", async () => {
@@ -1261,7 +1279,9 @@ test("a stopped worker is looked at again, so let_it_run cannot silence the pair
   const views = worker.published.filter((p) => p.t === "view").slice(afterStop);
   assert.equal(views.length, 1, "half an hour later the supervisor is asked about the stopped worker again");
   assert.equal(views[0].stopped, true, "and is told the worker is still stopped");
-  assert.match(views[0].view, /status: idle, still stopped, \d+s since the last look/);
+  // The status line carries the one number that says how bad the silence is. wassname's ask after
+  // the live incident: "be clear there have been no turns for this long, is it stuck".
+  assert.match(views[0].view, /status: stopped, looked at again, no new turn for \d+[smh]/);
 
   // Unchanged is not a reason to stay quiet here: an unchanged stopped worker is the thing to fix.
   t.mock.timers.tick(1_900_000);

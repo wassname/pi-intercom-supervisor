@@ -62,6 +62,15 @@ to write down what matters before it loses the detail.
 There is no round limit and no budget. Supervision runs until the human stops it. Ending early is
 the failure this exists to prevent, so never stop because it feels like enough.
 
+The human typing in the worker session is not a handover, and it is not a reason to stand back.
+They say a word and go to bed; the worker is then stopped with nobody driving it, which is the
+state you exist for. They will stop you themselves when they want you stopped. Judge the worker
+against the goal and nothing else.
+
+Every view says how long the worker has gone with no new turn. A worker that has produced nothing
+for a long time is stuck, or waiting for you, or in one command that will not return. Say which
+one you think it is, and use the number rather than guessing from the turns.
+
 The worker sends its first view as it pairs. It is below this message, and it is what you
 answer.`;
 
@@ -102,7 +111,10 @@ A fresh view follows. Answer it with one tool call: steer, done or let_it_run.`;
  */
 export const TOOL_LET_IT_RUN =
   "The worker is on track and needs no instruction. The usual answer at a check in. Costs nothing and reaches nobody."
-  + " Call it once and then stop. The next view wakes you by itself.";
+  + " Call it once and then stop. The next view wakes you by itself."
+  // Repeated here because a tool description survives a compaction and the brief does not. The
+  // live failure was a let_it_run reasoned "human is actively directing", two hours before dawn.
+  + " The human being present is never the reason: they stop you themselves when they want you stopped.";
 
 /**
  * How a look ends, and it must appear in every verdict's result.
@@ -131,8 +143,9 @@ ${workerStopped ? STOPPED_WARNING : "The next view wakes you."}`;
  */
 export const STOPPED_WARNING =
   `Note: that view said the worker has stopped. A stopped worker does not start again by itself, so
-letting it run leaves it stopped until you steer it or the human types something. If the goal is not
-met and nobody else is driving, steer. You will be shown this worker again shortly either way.`;
+letting it run leaves it stopped. If the goal is not met, steer. A human message in the view is not
+somebody else driving it: they go to bed, and the worker stays stopped. You will be shown this
+worker again shortly either way.`;
 
 /** The answer to a second let_it_run in one look. Costs a round trip and no error line. */
 export const LET_IT_RUN_AGAIN =
@@ -179,8 +192,10 @@ export const REVIEW_NUDGE = (view: string, rounds: number, stopped: boolean) =>
 
 ${view}
 
-${rounds} instructions so far. Answer with one tool call: steer, done or let_it_run. The word on its own
-does nothing; only the call reaches the worker.`
+${rounds} instructions so far. The status line says how long it has had no new turn. It will not start
+again by itself, and the human being present does not count as somebody driving it. Answer with one
+tool call: steer, done or let_it_run. The word on its own does nothing; only the call reaches the
+worker.`
     : `${VIEW_CHECKIN}
 
 ${view}
@@ -188,7 +203,10 @@ ${view}
 ${rounds} instructions so far. Call let_it_run unless this is going somewhere wrong. Interrupting a
 working agent costs it its train of thought, so the bar is real evidence in the view, not a
 tidier plan. Never invent an instruction to have something to say, and never report a fact you
-did not read: a wrong fact is worse than silence.`;
+did not read: a wrong fact is worse than silence.
+
+One exception, in the status line: a worker that is working and has had no new turn for a long time
+is inside one command that is not returning. Ask it what that command is and how long it should take.`;
 
 /** Refusal shown when done is called while the worker still has work running. */
 export const DONE_BLOCKED = (what: string) =>

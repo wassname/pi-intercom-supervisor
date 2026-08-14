@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MAX_VIEW_BYTES, buildView, outstandingWork, problems, progressKey, turnsSince, type Entry } from "./view.ts";
+import { MAX_VIEW_BYTES, age, buildView, outstandingWork, problems, progressKey, sinceLastTurn, turnsSince, type Entry } from "./view.ts";
 
 function assistant(text: string, calls: Array<{ name: string; args: Record<string, unknown> }> = []): Entry {
   return {
@@ -255,6 +255,23 @@ test("buildView reports the goal, the counts, and the problems", () => {
   assert.match(view, /turns: 2/);
   assert.match(view, /results\.md/);
   assert.match(view, /bash exit 2/);
+});
+
+test("how long the worker has been quiet, measured from its own last entry", () => {
+  // The number wassname asked for after the 2h27m silence: "there have been no turns for this
+  // long, is it stuck". Measured from the worker's last message, not from the supervisor's last
+  // look, so it reads the same whether the worker sits at the prompt or hangs inside one command.
+  const now = Date.parse("2026-08-14T04:29:00Z");
+  const at = (iso: string): Entry => ({ ...assistant("working"), timestamp: iso });
+
+  const stopped = [at("2026-08-14T01:00:00Z"), at("2026-08-14T02:02:18Z")];
+  assert.equal(age(sinceLastTurn(stopped, now)), "2h27m", "the real overnight gap, from session 019ffa73");
+
+  // The last entry wins even when an older one follows it in some other order, and a branch with
+  // no timestamps at all reports 0 rather than throwing.
+  assert.equal(age(sinceLastTurn([at("2026-08-14T04:28:30Z")], now)), "30s");
+  assert.equal(age(sinceLastTurn([at("2026-08-14T03:44:00Z")], now)), "45m");
+  assert.equal(sinceLastTurn([assistant("no stamp")], now), 0);
 });
 
 test("buildView keeps the newest turns when it has to cut for the channel limit", () => {
