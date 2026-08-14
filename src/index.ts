@@ -47,6 +47,7 @@ import {
   TOOL_LET_IT_RUN,
   LET_IT_RUN_ACK,
   LET_IT_RUN_AGAIN,
+  STEER_ACK,
   loadSupervisorPrompt,
 } from "./prompts.ts";
 
@@ -800,7 +801,7 @@ Tell them in your reply, quoting it, so they can correct it.`,
         ? `\nThis says much the same as instruction ${repeat.n}: "${repeat.old}"\nIf the next view shows nothing new, say what evidence makes repeating it worth another round, or change approach.`
         : "";
       endLook(context);
-      return { content: [{ type: "text", text: `Steered. That is instruction ${state.steerRounds}.${warning}` }] };
+      return { content: [{ type: "text", text: `${STEER_ACK(state.steerRounds)}${warning}` }] };
     },
   });
 

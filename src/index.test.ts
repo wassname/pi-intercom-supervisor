@@ -586,6 +586,25 @@ test("a sign-off verdict is answered, not aborted, and a runaway is still cut", 
   assert.equal(sup.aborts.length, 1, "the count is per look, not per pairing");
 });
 
+test("every verdict result names the way to end the turn, steer included", async () => {
+  // Session 019ffa73 after the let_it_run wording was fixed at 11:05Z: 38 let_it_run looks ended
+  // cleanly, but all 22 steers ran "CALL:steer -> Steered. That is instruction N -> CALL:let_it_run
+  // -> Already recorded". The steer result named no exit, so a spare tool call was the only move
+  // left. Any result that ends a look has to carry END_TURN.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "@worker make the results table");
+  await sup.agentStart();
+
+  const steered = await sup.tools.get("steer")!.execute("id", { message: "read the log" }, undefined, undefined, sup.ctx);
+  assert.match(steered.content[0].text, /That is instruction 1/);
+  assert.match(steered.content[0].text, /call no further tool/, "a steer result must name the exit too");
+
+  await sup.agentStart();
+  const ran = await sup.tools.get("let_it_run")!.execute("id", { reason: "on track" }, undefined, undefined, sup.ctx);
+  assert.match(ran.content[0].text, /call no further tool/);
+});
+
 test("a view that arrives mid-answer starts a fresh look", async () => {
   // A view sent while the supervisor is busy is queued as a followUp, and a followUp runs inside
   // the agent loop already going, so agent_start does not fire again. Counting per agent run would

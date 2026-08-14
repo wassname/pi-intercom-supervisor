@@ -105,21 +105,30 @@ export const TOOL_LET_IT_RUN =
   + " Call it once and then stop. The next view wakes you by itself.";
 
 /**
- * A tool result reads as a prompt to act again, so it has to say the look is finished.
+ * How a look ends, and it must appear in every verdict's result.
  *
- * It used to end "Say nothing more until the next view arrives", and that is the one thing a model
- * cannot do. A turn ends when the assistant writes text and calls no tool, so forbidding text left
- * only another tool call. Session 019ffa73, every one of fifteen looks: a true reason, then a
- * second true reason two seconds later, then the abort. It now names the way out instead.
+ * A tool result reads as a prompt to act again. A turn ends only when the assistant writes text and
+ * calls no tool, so a result that does not name that exit leaves another tool call as the only move.
+ * The let_it_run result used to say "Say nothing more until the next view arrives", which forbids the
+ * exit outright: session 019ffa73 answered with a second let_it_run on all sixteen looks before 11:05Z
+ * and aborted every one. The steer result said nothing about ending, and cost a spare let_it_run on
+ * 22 of 22 steers in the fifteen hours after.
  */
+export const END_TURN =
+  `End your turn now: write one short line, or nothing at all, and call no further tool.`;
+
 export const LET_IT_RUN_ACK = (reason: string) =>
-  `Letting it run: ${reason}\n\nRecorded, and the worker was not touched. This look is finished. End your turn now:
-write one short line, or nothing at all, and call no further tool. The next view wakes you.`;
+  `Letting it run: ${reason}\n\nRecorded, and the worker was not touched. This look is finished. ${END_TURN}
+The next view wakes you.`;
 
 /** The answer to a second let_it_run in one look. Costs a round trip and no error line. */
 export const LET_IT_RUN_AGAIN =
   `Already recorded for this view, so this call did nothing. One verdict is all a look needs.
-End your turn now: write one short line, or nothing at all, and call no further tool.`;
+${END_TURN}`;
+
+/** The answer to a steer that reached the worker. The warning about a repeat is appended after it. */
+export const STEER_ACK = (round: number) =>
+  `Steered. That is instruction ${round}. The worker has it, and this look is finished. ${END_TURN}`;
 export const TOOL_STEER =
   "Send one concrete next action to the worker. It arrives as a user message in the worker session, so it interrupts.";
 export const TOOL_DONE =
