@@ -102,7 +102,7 @@ function harness(
     appendEntry: (type: string, data: any) => appended.push({ type, data }),
     sendUserMessage: (content: string, options?: any) => userMessages.push({ content, options }),
     // pi's own sendMessage: a CustomMessageEntry, in the LLM context, and with triggerTurn false it
-    // starts no turn (session-manager.d.ts:85, agent-session.d.ts:343).
+    // starts no turn (session-manager.d.ts:85, agent-session.d.ts:398).
     sendMessage: (message: any, options?: any) => contextMessages.push({ content: message.content, options }),
     // On the pi API, NOT on the command context. Putting them on the context here is what hid a
     // real bug: the live command handler threw "context.getActiveTools is not a function", and
@@ -393,7 +393,7 @@ test("goal, pairing and the steer count all survive a reload together", async ()
 
 test("a view that arrives while the supervisor is thinking is queued, not dropped", async () => {
   // pi throws "Agent is already processing" when sendUserMessage gets no delivery option, and the
-  // catch upstream turns that into a dropped message. On a two minute look the supervisor would
+  // catch upstream turns that into a dropped message. On a half hour look the supervisor would
   // silently skip a whole look.
   const sup = harness(SUPER_ID, { isIdle: false });
   await sup.start();
@@ -563,7 +563,7 @@ test("let_it_run says the turn is over, so it is not called four times running",
 });
 
 test("a sign-off verdict is answered, not aborted, and a runaway is still cut", async () => {
-  // Session 019ffa73, 2026-08-13, all fifteen looks: let_it_run "job 23 progressing normally
+  // Session 019ffa73, 2026-08-13, sixteen times before 11:05Z: let_it_run "job 23 progressing normally
   // (438/600 steps)", then let_it_run "waiting for job 23 to reach Evidence-b", then an empty
   // assistant message with errorMessage "This operation was aborted". Both reasons were true, so
   // the second call was the model signing off and the abort made a normal look look like a fault.
@@ -1287,6 +1287,47 @@ test("a stopped worker is looked at again, so let_it_run cannot silence the pair
   t.mock.timers.tick(1_900_000);
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(worker.published.filter((p) => p.t === "view").length, afterStop + 2, "and again after that");
+});
+
+test("a worker that pairs at the prompt and never takes a turn is still watched", async (t) => {
+  // The same silence reached from the other end. The timer used to start only on turn_start, so a
+  // worker paired or reloaded while sitting at the prompt had no timer at all. Seen live on
+  // 2026-08-14: both sessions reloaded, the supervisor asked for a view, and nothing came back.
+  t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+  const worker = harness(WORKER_ID, { entries: [message("user", "do the thing")], isIdle: true });
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 300));
+  const atPairing = worker.published.filter((p) => p.t === "view").length;
+
+  // No turnStart and no settle: this worker has done nothing since it was paired.
+  t.mock.timers.tick(1_900_000);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(
+    worker.published.filter((p) => p.t === "view").length,
+    atPairing + 1,
+    "half an hour after pairing the supervisor is shown the worker, with no turn having happened",
+  );
+});
+
+test("a worker that reloads at the prompt starts watching itself again", async (t) => {
+  // rejoinOrDrop is the only thing that runs on a reloaded worker that then sits idle. Without the
+  // timer start there, /reload silently ends the watching, which is the worst place to lose it:
+  // /reload is how a fix reaches a running pairing.
+  t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+  const carried = [{ type: "custom", customType: STATE_ENTRY, data: { role: "worker", pairedId: SUPER_ID, goal: "g", steerRounds: 0 } }];
+  const worker = harness(WORKER_ID, { entries: [...carried, message("user", "do the thing")], isIdle: true });
+  await worker.start();
+  await new Promise((r) => setTimeout(r, 300));
+  const atReload = worker.published.filter((p) => p.t === "view").length;
+
+  t.mock.timers.tick(1_900_000);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(
+    worker.published.filter((p) => p.t === "view").length,
+    atReload + 1,
+    "half an hour after the reload the supervisor is shown the idle worker",
+  );
 });
 
 test("a timer look at a worker that has not moved is not sent, until it has been skipped three times", async (t) => {

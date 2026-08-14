@@ -221,7 +221,7 @@ export default function (pi: any) {
    * to judge. A user message always starts a turn (pi types.d.ts:754), so the supervisor answered
    * these with a verdict before any view existed: twice on 2026-08-13, and 98 times an hour before
    * that. No wording stops it, because the turn should not be there at all. A custom message with
-   * triggerTurn false joins the context and waits for the view to wake it (agent-session.d.ts:343).
+   * triggerTurn false joins the context and waits for the view to wake it (agent-session.d.ts:398).
    * display true keeps it on screen, where a user message used to be. - CLAUDE
    */
   function tellSupervisor(text: string) {
@@ -323,6 +323,8 @@ export default function (pi: any) {
       return;
     }
     if (state.role !== "supervisor") {
+      // A worker reloaded at the prompt takes no turn, so this is its only chance to start watching.
+      startWatch();
       ctx?.ui?.notify?.(`intercom-supervisor: still supervised by ${state.pairedId.slice(0, 8)}`, "info");
       return;
     }
@@ -400,6 +402,7 @@ export default function (pi: any) {
       // "waiting for the first view". A worker paired while idle never settles, so waiting for
       // agent_settled can mean waiting for ever.
       await publishView(ctx, "sent at pairing");
+      startWatch(); // paired while sitting at the prompt is the common case, and turn_start may never come
       return;
     }
 
@@ -447,7 +450,7 @@ export default function (pi: any) {
       verdictsThisLook = 0;
       // followUp, not steer: let the supervisor finish the decision it is making, then look again.
       // With no option at all pi throws "Agent is already processing" and the view is lost, which
-      // on a two minute look means the supervisor skips a whole look for no visible reason.
+      // on a half hour look means the supervisor skips a whole look for no visible reason.
       pi.sendUserMessage(
         REVIEW_NUDGE(wire.view, state.steerRounds, wire.stopped),
         ctx?.isIdle() ? undefined : { deliverAs: "followUp" },
@@ -588,18 +591,14 @@ export default function (pi: any) {
    * minutes and interrupt if the work has gone somewhere wrong. This is that, so the supervisor
    * keeps roughly the perspective you would have with the two windows side by side.
    *
-   * The timer runs whether or not the worker is working, and that is the point. It used to stop when
-   * the worker stopped, on the reasoning that a stopped worker cannot change. Session 019ffa73,
-   * 2026-08-14: the worker stopped at 02:02:18Z, the supervisor saw it stop and answered let_it_run,
-   * and the two then sat silent for two and a half hours until wassname typed "why stop". let_it_run
-   * means do nothing, doing nothing is what a stopped worker does, and with the timer off nothing was
-   * left to wake either side. A stopped worker is now looked at again like any other.
+   * It runs whether or not the worker is working, and from the moment the worker is paired rather
+   * than from its next turn. Both of those are the same bug twice, an idle worker nobody is looking
+   * at. It used to stop on agent_settled, since a stopped worker cannot change, and on 2026-08-14
+   * that left a stopped worker and a supervisor that had answered let_it_run sitting silent for two
+   * and a half hours. It used to start only on turn_start, so a worker that paired or reloaded while
+   * sitting at the prompt had no timer at all, which is the same silence reached from the other end.
    */
-  pi.on("turn_start", async (_event: unknown, context: any) => {
-    ctx = context;
-    // Set again, and before the role check, because a status set during session_start does not
-    // survive: the footer had not mounted yet, and nothing redraws it until the next save().
-    showStatus();
+  function startWatch() {
     if (state.role !== "worker" || !channel || watchTimer) return;
     watchTimer = setInterval(() => {
       if (Date.now() - lastLook < WATCH_INTERVAL_MS) return;
@@ -610,6 +609,17 @@ export default function (pi: any) {
         debug("timer look failed", { error: err.message });
       });
     }, WATCH_POLL_MS);
+    // Watching is not a reason for a process to stay alive. It ran from turn_start before, which no
+    // test reaches, so an interval from pairing time held node's test runner open for ever.
+    watchTimer.unref();
+  }
+
+  pi.on("turn_start", async (_event: unknown, context: any) => {
+    ctx = context;
+    // Set again, and before the role check, because a status set during session_start does not
+    // survive: the footer had not mounted yet, and nothing redraws it until the next save().
+    showStatus();
+    startWatch();
   });
 
   /** Fires only when no retry, compaction, or queued continuation will run, so the worker is truly done. */
@@ -789,7 +799,7 @@ export default function (pi: any) {
    * How many verdicts this look has had, and the cut for a real runaway.
    *
    * Session 019ffa73, every look: let_it_run with a true reason, then a second let_it_run with a
-   * different true reason, then "This operation was aborted". Fifteen looks, fifteen aborts. The
+   * different true reason, then "This operation was aborted", sixteen times before 11:05Z. The
    * second call is the model signing off, not a loop, and cutting it made an ordinary look end in
    * an error line. So a repeat is answered instead (LET_IT_RUN_AGAIN), and abort() waits for a
    * count no sign-off explains. Session 019ffa5f reached 645 calls, so the cut stays.
