@@ -119,6 +119,17 @@ const WATCH_INTERVAL_MS = 1_800_000;
 /** How often the timer checks whether a look is due. Sets how late a look can be, nothing else. */
 const WATCH_POLL_MS = 30_000;
 
+/** How many identical timer looks are skipped before the supervisor is shown one anyway. */
+const LOOKS_SKIPPED_MAX = 3;
+
+/**
+ * A view without the one line that changes on its own.
+ *
+ * The status line carries seconds into the turn, so two views of a worker that has done nothing are
+ * never byte-identical. Everything else in a view comes from the worker's branch.
+ */
+const bodyOf = (view: string) => view.split("\n").filter((line) => !line.startsWith("status: ")).join("\n");
+
 /**
  * Tools taken away from a supervising session, and given back when supervision ends.
  *
@@ -160,6 +171,9 @@ export default function (pi: any) {
   let watchTimer: ReturnType<typeof setInterval> | undefined;
   let lastLook = 0;
   let turnStartedAt = 0;
+  /** Worker side: the last view sent, less its status line, and how many timer looks matched it. */
+  let lastViewBody = "";
+  let looksSkipped = 0;
   /** Supervisor side: cleared when the worker acknowledges the pair. */
   let pairTimer: ReturnType<typeof setTimeout> | undefined;
   /** Supervisor side: the writer tools this session had, so reset gives back exactly those. */
@@ -525,7 +539,7 @@ export default function (pi: any) {
    * `since` is the turn the view starts at: the diff for a routine look, 0 when the supervisor
    * needs the whole picture again.
    */
-  async function publishView(context: any, why: string, since = sentTurns) {
+  async function publishView(context: any, why: string, since = sentTurns, onlyIfChanged = false) {
     // Claimed before the await, not after. ps takes long enough that a second timer tick would
     // otherwise start its own look while this one is still waiting.
     lastLook = Date.now();
@@ -544,6 +558,21 @@ export default function (pi: any) {
       subagents,
       model: workerModel(await ownSession()),
     });
+    // A timer look at a worker that has done nothing since the last one wakes the supervisor to read
+    // a view it has already read. Session 019ffa73: 13 of 92 verdicts were "check-in with no new
+    // turns ... nothing to judge". The supervisor loses nothing by not being asked, because the view
+    // is the same view. It is asked anyway after LOOKS_SKIPPED_MAX, since a worker that has not moved
+    // for hours is itself worth seeing, and the elapsed seconds in the status line say so.
+    if (onlyIfChanged) {
+      if (bodyOf(view) === lastViewBody && looksSkipped < LOOKS_SKIPPED_MAX) {
+        looksSkipped += 1;
+        debug("look skipped, nothing new since the last view", { looksSkipped });
+        return;
+      }
+      looksSkipped = 0;
+    }
+    lastViewBody = bodyOf(view);
+
     sentTurns = turnsSince(entries);
     send({ t: "view", to: state.pairedId, view, stopped: idle });
     debug("published view", { why, to: state.pairedId, sentTurns, idle });
@@ -562,7 +591,7 @@ export default function (pi: any) {
     if (state.role !== "worker" || !channel || watchTimer) return;
     watchTimer = setInterval(() => {
       if (Date.now() - lastLook < WATCH_INTERVAL_MS) return;
-      publishView(ctx, `routine check in, ${Math.round((Date.now() - turnStartedAt) / 1000)}s into this turn`).catch((err: Error) => {
+      publishView(ctx, `routine check in, ${Math.round((Date.now() - turnStartedAt) / 1000)}s into this turn`, sentTurns, true).catch((err: Error) => {
         debug("timer look failed", { error: err.message });
       });
     }, WATCH_POLL_MS);

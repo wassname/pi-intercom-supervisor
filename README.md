@@ -228,6 +228,12 @@ the characters. On that session it holds the context near 25k instead of climbin
 at the last look. `npx tsx scripts/measure-prune.ts <session.jsonl>` replays a real session and
 prints the table.
 
+The other saving is not asking at all. A timer look at a worker that has done nothing since the last
+look shows the supervisor a view it has already read, and 13 of that session's 92 verdicts were
+exactly that: "check-in with no new turns; worker still working, no evidence of trouble". Those looks
+are now skipped, comparing the view without its status line, which carries a clock. After three
+skips one goes out anyway, because a worker that has not moved in two hours is itself worth seeing.
+
 ## Limits
 
 The `done` guard sees a child process named `pi` directly under the worker, so it misses a detached
@@ -240,7 +246,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 88 tests, free apart from a ps call
+npm test                      # 89 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```

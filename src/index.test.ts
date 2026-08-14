@@ -295,7 +295,9 @@ test("the second view carries only what happened after the first", async () => {
   const worker = harness(WORKER_ID, { entries });
   await worker.start();
   worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
-  await new Promise((r) => setTimeout(r, 5));
+  // 300ms, not 5: the pairing view runs ps, and a pairing that lands after the second settle sets
+  // the sent-turns mark past the turn this test is looking for. That flaked about one run in four.
+  await new Promise((r) => setTimeout(r, 300));
 
   await worker.settle();
   assert.match(worker.published.find((p) => p.t === "view").view, /THE FIRST INSTRUCTION/);
@@ -1216,6 +1218,37 @@ test("the supervisor gets a look at a working worker every half hour, without be
   t.mock.timers.tick(600_000);
   await new Promise((r) => setTimeout(r, 300)); // let any look that did start finish, so it counts
   assert.equal(worker.published.filter((p) => p.t === "view").length, after, "a stopped worker is not watched");
+});
+
+test("a timer look at a worker that has not moved is not sent, until it has been skipped three times", async (t) => {
+  // Session 019ffa73: 13 of 92 verdicts were the supervisor reading a view it had already read,
+  // e.g. "check-in with no new turns; worker still working, no evidence of trouble". An identical
+  // view carries no new information, so asking for a verdict on one only spends a model call.
+  t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+  const entries = [message("user", "do the thing")];
+  const worker = harness(WORKER_ID, { entries, isIdle: false });
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 300));
+  await worker.turnStart();
+
+  const look = async () => {
+    t.mock.timers.tick(1_900_000);
+    await new Promise((r) => setTimeout(r, 300)); // the look runs ps on the real clock
+    return worker.published.filter((p) => p.t === "view").length;
+  };
+
+  const first = await look();
+  assert.equal(await look(), first, "nothing changed, so the supervisor is not woken");
+  assert.equal(await look(), first, "still nothing");
+  assert.equal(await look(), first, "three skipped is the limit");
+  assert.equal(await look(), first + 1, "a worker that has not moved for hours is worth seeing");
+
+  // The count resets, so the next unchanged look is skipped again rather than sent.
+  assert.equal(await look(), first + 1, "skipping starts over after the forced look");
+
+  entries.push(message("assistant", "I read the log and queued job 12."));
+  assert.equal(await look(), first + 2, "a real new turn always goes out");
 });
 
 test("the worker counts reviews in a row where nothing changed", async () => {
