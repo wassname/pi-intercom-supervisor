@@ -234,6 +234,14 @@ exactly that: "check-in with no new turns; worker still working, no evidence of 
 are now skipped, comparing the view without its status line, which carries a clock. After three
 skips one goes out anyway, because a worker that has not moved in two hours is itself worth seeing.
 
+A stopped worker is the exception: it is always reported, and the timer keeps running for it. The
+timer used to stop when the worker did, since a stopped worker cannot change. On 2026-08-14 the
+worker stopped at 02:02:18Z, the supervisor answered `let_it_run` "waiting for the worker to
+re-queue in the main group", and the pairing went silent for two and a half hours until wassname
+typed "why stop". Nothing was going to re-queue: `let_it_run` means do nothing, which is what a
+stopped worker already does, and with the timer off nothing was left to raise it. The result of
+`let_it_run` now says that in words when the view reported a stop.
+
 ## Limits
 
 The `done` guard sees a child process named `pi` directly under the worker, so it misses a detached
@@ -246,7 +254,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 89 tests, free apart from a ps call
+npm test                      # 91 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```

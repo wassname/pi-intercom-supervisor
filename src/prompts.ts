@@ -117,9 +117,22 @@ export const TOOL_LET_IT_RUN =
 export const END_TURN =
   `End your turn now: write one short line, or nothing at all, and call no further tool.`;
 
-export const LET_IT_RUN_ACK = (reason: string) =>
+export const LET_IT_RUN_ACK = (reason: string, workerStopped = false) =>
   `Letting it run: ${reason}\n\nRecorded, and the worker was not touched. This look is finished. ${END_TURN}
-The next view wakes you.`;
+${workerStopped ? STOPPED_WARNING : "The next view wakes you."}`;
+
+/**
+ * Added to the let_it_run result when the view said the worker had stopped.
+ *
+ * Session 019ffa73, 2026-08-14: the worker stopped, the supervisor answered let_it_run "waiting for
+ * the worker to re-queue", and both sat still for two and a half hours. A stopped worker does not
+ * resume on its own, so letting it run leaves it stopped. The timer now looks again either way, and
+ * this says why that look will show the same thing.
+ */
+export const STOPPED_WARNING =
+  `Note: that view said the worker has stopped. A stopped worker does not start again by itself, so
+letting it run leaves it stopped until you steer it or the human types something. If the goal is not
+met and nobody else is driving, steer. You will be shown this worker again shortly either way.`;
 
 /** The answer to a second let_it_run in one look. Costs a round trip and no error line. */
 export const LET_IT_RUN_AGAIN =

@@ -1217,7 +1217,56 @@ test("the supervisor gets a look at a working worker every half hour, without be
   const after = worker.published.filter((p) => p.t === "view").length;
   t.mock.timers.tick(600_000);
   await new Promise((r) => setTimeout(r, 300)); // let any look that did start finish, so it counts
-  assert.equal(worker.published.filter((p) => p.t === "view").length, after, "a stopped worker is not watched");
+  assert.equal(worker.published.filter((p) => p.t === "view").length, after, "ten minutes is still too early");
+});
+
+test("letting a stopped worker run says plainly that the worker stays stopped", async () => {
+  // The other half of the two and a half hour silence. The supervisor answered let_it_run to a
+  // stopped worker while saying it was "waiting for the worker to re-queue". Nothing was going to
+  // re-queue. The result now says so, rather than the model having to know it.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "@worker make the results table");
+  const letItRun = sup.tools.get("let_it_run")!;
+
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "job 12 at step 40", stopped: false });
+  await new Promise((r) => setTimeout(r, 5));
+  const working = await letItRun.execute("id", { reason: "on track" }, undefined, undefined, sup.ctx);
+  assert.doesNotMatch(working.content[0].text, /does not start again by itself/, "a working worker needs no warning");
+
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "job 12 finished", stopped: true });
+  await new Promise((r) => setTimeout(r, 5));
+  const stopped = await letItRun.execute("id", { reason: "waiting for the worker to re-queue" }, undefined, undefined, sup.ctx);
+  assert.match(stopped.content[0].text, /A stopped worker does not start again by itself/);
+  assert.match(stopped.content[0].text, /steer/, "and it names the verdict that would actually move the worker");
+});
+
+test("a stopped worker is looked at again, so let_it_run cannot silence the pairing", async (t) => {
+  // Session 019ffa73, 2026-08-14. The worker stopped at 02:02:18Z. The supervisor saw the stop and
+  // answered let_it_run, "waiting for the worker to re-queue in the main group". Nothing then woke
+  // either side for two and a half hours, until wassname typed "why stop". let_it_run means do
+  // nothing, and doing nothing is exactly what a stopped worker does.
+  t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+  const worker = harness(WORKER_ID, { entries: [message("user", "do the thing")], isIdle: true });
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 300));
+
+  await worker.turnStart();
+  await worker.settle(); // the worker stops, and the supervisor answers let_it_run: no reply comes back
+  const afterStop = worker.published.filter((p) => p.t === "view").length;
+
+  t.mock.timers.tick(1_900_000);
+  await new Promise((r) => setTimeout(r, 300));
+  const views = worker.published.filter((p) => p.t === "view").slice(afterStop);
+  assert.equal(views.length, 1, "half an hour later the supervisor is asked about the stopped worker again");
+  assert.equal(views[0].stopped, true, "and is told the worker is still stopped");
+  assert.match(views[0].view, /status: idle, still stopped, \d+s since the last look/);
+
+  // Unchanged is not a reason to stay quiet here: an unchanged stopped worker is the thing to fix.
+  t.mock.timers.tick(1_900_000);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(worker.published.filter((p) => p.t === "view").length, afterStop + 2, "and again after that");
 });
 
 test("a timer look at a worker that has not moved is not sent, until it has been skipped three times", async (t) => {

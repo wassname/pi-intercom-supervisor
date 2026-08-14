@@ -160,6 +160,8 @@ export default function (pi: any) {
   let channel: IntercomExtensionChannel | undefined;
   let state: SuperviseState = { ...EMPTY_STATE };
   let latestView = "";
+  /** Supervisor side: whether the worker was stopped in that view, which changes what let_it_run costs. */
+  let workerStopped = false;
   let ctx: any;
   let ownId = "";
   /** Worker side: the last progressKey, and how many reviews in a row have matched it. */
@@ -439,6 +441,7 @@ export default function (pi: any) {
 
     if (wire.t === "view" && state.role === "supervisor") {
       latestView = wire.view;
+      workerStopped = wire.stopped;
       // A new view is a new look, so it gets its own verdict. agent_start alone is not enough: a
       // followUp is consumed inside the running agent loop, so no second agent_start fires and the
       // count carries over. That aborted the second honest verdict of a busy night. - CLAUDE
@@ -582,6 +585,13 @@ export default function (pi: any) {
    * The timer look. A human supervising does not read every token; they wander past every few
    * minutes and interrupt if the work has gone somewhere wrong. This is that, so the supervisor
    * keeps roughly the perspective you would have with the two windows side by side.
+   *
+   * The timer runs whether or not the worker is working, and that is the point. It used to stop when
+   * the worker stopped, on the reasoning that a stopped worker cannot change. Session 019ffa73,
+   * 2026-08-14: the worker stopped at 02:02:18Z, the supervisor saw it stop and answered let_it_run,
+   * and the two then sat silent for two and a half hours until wassname typed "why stop". let_it_run
+   * means do nothing, doing nothing is what a stopped worker does, and with the timer off nothing was
+   * left to wake either side. A stopped worker is now looked at again like any other.
    */
   pi.on("turn_start", async (_event: unknown, context: any) => {
     ctx = context;
@@ -591,7 +601,12 @@ export default function (pi: any) {
     if (state.role !== "worker" || !channel || watchTimer) return;
     watchTimer = setInterval(() => {
       if (Date.now() - lastLook < WATCH_INTERVAL_MS) return;
-      publishView(ctx, `routine check in, ${Math.round((Date.now() - turnStartedAt) / 1000)}s into this turn`, sentTurns, true).catch((err: Error) => {
+      // A stopped worker is always reported, never skipped as unchanged: an unchanged stopped worker
+      // is the state that needs a steer, and nothing else is going to bring it up.
+      const idle = ctx.isIdle();
+      const secs = Math.round((Date.now() - (idle ? lastLook : turnStartedAt)) / 1000);
+      const why = idle ? `still stopped, ${secs}s since the last look` : `routine check in, ${secs}s into this turn`;
+      publishView(ctx, why, sentTurns, !idle).catch((err: Error) => {
         debug("timer look failed", { error: err.message });
       });
     }, WATCH_POLL_MS);
@@ -604,8 +619,8 @@ export default function (pi: any) {
     showStatus();
     debug("agent_settled", { role: state.role, hasChannel: Boolean(channel) });
     if (state.role !== "worker" || !channel) return;
-    clearInterval(watchTimer); // the worker stopped, so there is nothing to watch until it starts again
-    watchTimer = undefined;
+    // The timer keeps running. See the turn_start comment: stopping it here is what let the pairing
+    // go silent for two and a half hours after the supervisor answered let_it_run to a stopped worker.
     try {
       // A subagent runs as its own process and leaves no unanswered tool call, so a settled worker
       // can still be spending. Report it and let the supervisor steer; do not wait here.
@@ -895,7 +910,7 @@ Tell them in your reply, quoting it, so they can correct it.`,
         return { content: [{ type: "text", text: "Not supervising." }], isError: true };
       }
       const first = endLook(context);
-      return { content: [{ type: "text", text: first ? LET_IT_RUN_ACK(params.reason) : LET_IT_RUN_AGAIN }] };
+      return { content: [{ type: "text", text: first ? LET_IT_RUN_ACK(params.reason, workerStopped) : LET_IT_RUN_AGAIN }] };
     },
   });
 
