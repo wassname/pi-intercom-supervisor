@@ -145,15 +145,30 @@ export const TOOL_DONE =
  * A check in is not a decision point. Interrupting a working agent is expensive and usually wrong,
  * so the two triggers ask for different things.
  */
+/**
+ * The two openers, and the test the context pruner uses to find a view it can drop.
+ *
+ * They are constants because two things read them: the nudge that writes a view, and the pruner
+ * that later collapses it. Matching the prose in two places would let them drift silently, and a
+ * pruner that stops recognising views just quietly stops working.
+ */
+export const VIEW_STOPPED = "The worker stopped.";
+export const VIEW_CHECKIN = "Checking in on the worker, which is still going.";
+export const isViewText = (text: string) => text.startsWith(VIEW_STOPPED) || text.startsWith(VIEW_CHECKIN);
+
+/** What an old view is replaced with. Short, and it says where the content went. */
+export const VIEW_PRUNED =
+  "[an earlier view of the worker, dropped once you had judged it. Your verdict on it follows.]";
+
 export const REVIEW_NUDGE = (view: string, rounds: number, stopped: boolean) =>
   stopped
-    ? `The worker stopped.
+    ? `${VIEW_STOPPED}
 
 ${view}
 
 ${rounds} instructions so far. Answer with one tool call: steer, done or let_it_run. The word on its own
 does nothing; only the call reaches the worker.`
-    : `Checking in on the worker, which is still going.
+    : `${VIEW_CHECKIN}
 
 ${view}
 

@@ -216,6 +216,18 @@ commit or error, and an instruction that reuses a recent one's vocabulary comes 
 stops anything. Word overlap runs about 0.44 on a rewording against under 0.2 on two different
 instructions, and 0 on a paraphrase sharing no words, so it is a floor on repetition, not a bound.
 
+Watching is cheap enough to put a good model on it. One 16 hour pairing on the same model both
+sides, deepseek-v4-pro, 75 looks and 23 steers: the worker spent $16.11 over 789 model calls and
+the supervisor $0.38 over 182, about 40x less. The supervisor reads a lot and writes almost
+nothing, and most of what it reads is a cache hit at $0.004/Mtok against $0.44 for fresh input.
+
+So the reason to keep its context short is not the bill, it is that a model judging one view should
+not read 234k tokens to do it. Before each call, a look older than the last three loses its view
+body and its thinking, and keeps its verdict. The verdicts are the running notes and they are 7% of
+the characters. On that session it holds the context near 25k instead of climbing to 184k, 82% off
+at the last look. `npx tsx scripts/measure-prune.ts <session.jsonl>` replays a real session and
+prints the table.
+
 ## Limits
 
 The `done` guard sees a child process named `pi` directly under the worker, so it misses a detached
@@ -228,7 +240,7 @@ nothing authenticates it. The stagnation count lives in memory and restarts with
 ## Testing
 
 ```
-npm test                      # 85 tests, free apart from a ps call
+npm test                      # 88 tests, free apart from a ps call
 npx tsx scripts/e2e.ts        # two real pi processes and a real model, costs cents
 PI_SUPERVISOR_DEBUG=1 pi ...  # trace the wire to stderr, since the channel is invisible
 ```

@@ -48,6 +48,8 @@ import {
   LET_IT_RUN_ACK,
   LET_IT_RUN_AGAIN,
   STEER_ACK,
+  VIEW_PRUNED,
+  isViewText,
   loadSupervisorPrompt,
 } from "./prompts.ts";
 
@@ -448,6 +450,47 @@ export default function (pi: any) {
   // covers a view, which is the usual way a look begins.
   pi.on("agent_start", () => {
     verdictsThisLook = 0;
+  });
+
+  /**
+   * A finished look keeps its verdict and loses the raw material behind it.
+   *
+   * Every look brings a view of about 1.4k tokens and a block of thinking about as long, and neither
+   * means anything once the verdict is written. Session 019ffa73, 16 hours and 75 looks: the context
+   * ran 37.9k -> 234.7k with no compaction, and was 56% view bodies and 32% old thinking by
+   * character count. What the supervisor actually needs is the 7% that is its own verdicts, e.g.
+   * "job 26 Evidence-b partially landed: post rho 0.726 > prompted 0.718 (was tied before rebuild),
+   * probe d flipped +0.059". Those are its running notes on the worker, and better memory than the
+   * turns it read to write them.
+   *
+   * Cache reads are $0.004/Mtok, so this was never about the bill. It is that a model judging one
+   * view should not be reading 234k tokens to do it.
+   *
+   * Views are incremental, each covering what is new since the last, so the newest few stay whole
+   * in case the current one reads against them. scripts/measure-prune.ts replays a real session.
+   */
+  const LOOKS_KEPT = 3;
+  pi.on("context", (event: any) => {
+    if (state.role !== "supervisor") return;
+    const isView = (m: any) =>
+      m.role === "user" && m.content?.some?.((c: any) => c.type === "text" && isViewText(c.text));
+
+    // Everything before the oldest look we keep whole is history.
+    const views = event.messages.flatMap((m: any, i: number) => (isView(m) ? [i] : []));
+    if (views.length <= LOOKS_KEPT) return;
+    const cut = views[views.length - LOOKS_KEPT];
+
+    // New objects, never a mutation: event.messages is the live branch the session also reads from.
+    return {
+      messages: event.messages.flatMap((m: any, i: number) => {
+        if (i >= cut) return [m];
+        if (isView(m)) return [{ ...m, content: [{ type: "text", text: VIEW_PRUNED }] }];
+        if (m.role !== "assistant") return [m];
+        const kept = (m.content ?? []).filter((c: any) => c.type !== "thinking");
+        // A message that was only thinking has nothing left to say, and holds no tool call to orphan.
+        return kept.length ? [{ ...m, content: kept }] : [];
+      }),
+    };
   });
 
   pi.on("session_start", async (_event: unknown, context: any) => {

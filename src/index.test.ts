@@ -173,6 +173,12 @@ function harness(
     deliver(fromSessionId: string, payload: unknown) {
       onEvent({ type: "message", fromSessionId, payload });
     },
+    /** Fired before every model call. Returns what the model would actually be sent. */
+    async context(messages: any[]) {
+      let out = messages;
+      for (const fn of handlers.get("context") ?? []) out = (await fn({ messages: out }, ctx))?.messages ?? out;
+      return out;
+    },
   };
 }
 
@@ -603,6 +609,51 @@ test("every verdict result names the way to end the turn, steer included", async
   await sup.agentStart();
   const ran = await sup.tools.get("let_it_run")!.execute("id", { reason: "on track" }, undefined, undefined, sup.ctx);
   assert.match(ran.content[0].text, /call no further tool/);
+});
+
+test("an old view is dropped from context once its verdict is in, and the verdict is kept", async () => {
+  // Session 019ffa73 over 16 hours: 80 views, 433k chars, and a context that went 37.9k -> 234.7k
+  // with no compaction. The views are the bulk and they go stale within minutes; the verdict
+  // reasons are 330 chars each and are what the supervisor actually needs to remember.
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "@worker make the results table");
+
+  const view = (n: number) => ({ role: "user", content: [{ type: "text", text: `The worker stopped.\n\njob ${n} running` }] });
+  const judged = (n: number) => ({
+    role: "assistant",
+    content: [{ type: "thinking", thinking: `long private reasoning about job ${n}` }, { type: "toolCall", name: "let_it_run", arguments: { reason: `job ${n} on track` } }],
+  });
+  const verdict = (n: number) => ({ role: "toolResult", content: [{ type: "text", text: `Letting it run: job ${n} on track` }] });
+  const history = [1, 2, 3, 4, 5].flatMap((n) => [view(n), judged(n), verdict(n)]);
+
+  const sent = await sup.context([{ role: "user", content: [{ type: "text", text: "the brief" }] }, ...history]);
+  const flat = JSON.stringify(sent);
+
+  assert.equal(sent[0].content[0].text, "the brief", "the policy is not a view, so it stays");
+  assert.match(sent[1].content[0].text, /dropped once you had judged it/, "view 1 is old, so it goes");
+  assert.doesNotMatch(flat, /reasoning about job 1/, "old thinking is raw material, not memory");
+  assert.doesNotMatch(flat, /reasoning about job 2/);
+  assert.match(flat, /reasoning about job 5/, "the newest looks are untouched");
+
+  for (const n of [1, 2, 3, 4, 5]) {
+    assert.match(flat, new RegExp(`Letting it run: job ${n} on track`), `verdict ${n} is the memory, so it stays`);
+    assert.match(flat, new RegExp(`"reason":"job ${n} on track"`), `and so is the reason it was called with`);
+  }
+  // A pruned look still reads as one exchange: view stub, the verdict call, its result.
+  assert.equal(sent[2].content.length, 1, "only the thinking was taken out of the judged message");
+  assert.equal(sent[2].content[0].type, "toolCall");
+});
+
+test("a worker session never has its context rewritten", async () => {
+  // The pruner reads views, and only a supervisor has any. A worker running this extension must
+  // see its own transcript untouched.
+  const work = harness(WORKER_ID);
+  await work.start();
+  const messages = [{ role: "user", content: [{ type: "text", text: "The worker stopped.\n\nlooks like a view" }] }];
+  const sent = await work.context([...messages, ...messages, ...messages, ...messages]);
+  assert.equal(sent.length, 4);
+  assert.ok(sent.every((m: any) => m.content[0].text.includes("looks like a view")), "nothing was dropped");
 });
 
 test("a view that arrives mid-answer starts a fresh look", async () => {
