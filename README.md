@@ -116,8 +116,8 @@ count, and the view says so and carries the summary.
 
 The view body is [pi-vcc](https://github.com/sting8k/pi-vcc)'s `compile()`, the same algorithmic
 compactor (no LLM calls) you can run as your own. On top of it the view carries what a compactor
-has no reason to track: tool calls with no result, child pi processes, tool errors, and whether
-anything changed since the last review.
+has no reason to track: tool calls with no result, child pi processes, and whether anything
+changed since the last review.
 
 pi-vcc drops the worker's reasoning, which you do see on screen, so this keeps the last two blocks
 by rewriting them as text before compiling. They stay where they happened, next to the tool call
@@ -172,9 +172,10 @@ the agent loop already going, so `agent_start` does not fire again.
 A stop and a check in ask for different things. A stop is a decision point. A check in leans on `let_it_run`,
 because interrupting a working agent costs it its train of thought. The original also ran two
 mechanical checks mid-turn, five tool errors in a row and five reads of one file with no edit.
-Those are deleted: the supervisor sees the same errors in the view and judges them itself. Ported
-and kept: the process tree check (`src/subagents.ts`, `ps` for child pi processes, so a settled
-worker with a subagent still running is not called finished) and the SUPERVISOR.md precedence.
+Those are deleted. A failed tool result appears once in the fresh VCC turns, rather than becoming
+persistent state. Ported and kept: the process tree check (`src/subagents.ts`, `ps` for child pi
+processes, so a settled worker with a subagent still running is not called finished) and the
+SUPERVISOR.md precedence.
 
 `src/prompts.ts` holds every word the supervisor reads, in the order it reads them. Only the nudge
 and the view repeat per look; the policy, the verdict rules and the goal are sent once. The verdict
@@ -209,8 +210,8 @@ as strong as it sounds. The first stops an ungrounded instruction, not an ungrou
 supervisor can call `set_goal` with something vague; quoting it to you is the only real check. The
 second proves no tracked work is missing, not that nothing is running.
 
-Against a supervisor that circles, the view reports how many reviews in a row produced no new file,
-commit or error, and an instruction that reuses a recent one's vocabulary comes back named. Neither
+Against a supervisor that circles, the view reports how many reviews in a row produced no new file
+or commit, and an instruction that reuses a recent one's vocabulary comes back named. Neither
 stops anything. Word overlap runs about 0.44 on a rewording against under 0.2 on two different
 instructions, and 0 on a paraphrase sharing no words, so it is a floor on repetition, not a bound.
 

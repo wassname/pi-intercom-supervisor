@@ -818,7 +818,7 @@ export default function (pi: any) {
   pi.registerTool({
     name: "worker_view",
     label: "Worker view",
-    description: "Read the latest view of the worker session: goal, status, files touched, problems, recent turns.",
+    description: "Read the latest view of the worker session: goal, status, files touched, and recent turns.",
     parameters: Type.Object({}),
     // Guarded like the rest. Unguarded it answered "the worker has not stopped since pairing" to a
     // session with no pairing at all, which read as confirmation to a worker that had wondered

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MAX_VIEW_BYTES, age, buildView, outstandingWork, problems, progressKey, sinceLastTurn, turnsSince, type Entry } from "./view.ts";
+import { MAX_VIEW_BYTES, age, buildView, outstandingWork, progressKey, sinceLastTurn, turnsSince, type Entry } from "./view.ts";
 
 function assistant(text: string, calls: Array<{ name: string; args: Record<string, unknown> }> = []): Entry {
   return {
@@ -84,7 +84,7 @@ test("pi-vcc reports the files the worker wrote, and separates them from the one
   assert.match(view, /Read:.*src\/never\.ts/);
 });
 
-test("progressKey is unchanged when a review produced no new file, commit or error", () => {
+test("progressKey is unchanged when a review produced no new file or commit", () => {
   const worked = [assistant("editing", [{ name: "edit", args: { path: "src/a.ts" } }])];
   const talked = [...worked, assistant("I will look into that shortly.")];
   const wroteMore = [...worked, assistant("editing", [{ name: "write", args: { path: "src/b.ts" } }])];
@@ -112,22 +112,6 @@ test("a commit counts as progress, even when no file was written since", () => {
   assert.notEqual(progressKey(after), progressKey(before));
 });
 
-test("the same error hit again is not progress", () => {
-  // Otherwise a worker stuck rerunning one failing test resets the counter every review.
-  const failed = [toolResult("bash", "3 failed\nexited with code 1")];
-  assert.equal(progressKey([...failed, ...failed]), progressKey(failed));
-});
-
-test("problems catches a tool error and a non-zero exit, ignores a clean result", () => {
-  const found = problems([
-    toolResult("bash", "ok, all good"),
-    toolResult("bash", "3 failed\nexited with code 1"),
-    toolResult("read", "no such file", true),
-  ]);
-  assert.equal(found.length, 2);
-  assert.match(found[0], /^bash exit 1:/);
-  assert.match(found[1], /^read failed:/);
-});
 
 test("outstandingWork finds tool calls that never got a result", () => {
   const answered: Entry = {
@@ -156,27 +140,10 @@ test("buildView reports a tool call with no result, so done can be refused", () 
 
 test("the view says how many reviews in a row changed nothing, and says nothing at zero", () => {
   const entries = [assistant("hi")];
-  assert.match(buildView({ goal: "g", status: "idle", entries, stale: 3 }), /no new file, commit or error for 3 reviews/);
+  assert.match(buildView({ goal: "g", status: "idle", entries, stale: 3 }), /no new file or commit for 3 reviews/);
   assert.doesNotMatch(buildView({ goal: "g", status: "idle", entries }), /reviews in a row/);
 });
 
-test("an error is dropped once the same tool runs clean again", () => {
-  // Otherwise a failure the worker already fixed stays in the view for the rest of a multi-day run.
-  const stale = problems([
-    toolResult("bash", "3 failed\nexited with code 1"),
-    toolResult("bash", "all tests passed"),
-  ]);
-  assert.deepEqual(stale, [], "a later clean run of the same tool clears the old failure");
-
-  const live = problems([
-    toolResult("bash", "all tests passed"),
-    toolResult("bash", "3 failed\nexited with code 1"),
-  ]);
-  assert.equal(live.length, 1, "the newest failure is still reported");
-
-  const other = problems([toolResult("bash", "exit code 1"), toolResult("read", "fine")]);
-  assert.equal(other.length, 1, "a different tool running clean must not clear bash's failure");
-});
 
 test("the view merges the worker's compaction summary with the turns after it", () => {
   // pi-vcc's compile() takes the old summary as previousSummary, so nothing between the summary
@@ -230,6 +197,29 @@ test("the view does not tell the supervisor to use vcc_recall, a tool it does no
   assert.doesNotMatch(view, /vcc_recall/);
 });
 
+test("supervisor directives are not sent back as worker evidence", () => {
+  const directive: Entry = {
+    type: "message",
+    message: { role: "user", content: "[supervisor] Read exactly src/a.ts and quote it." },
+  };
+  const first = buildView({
+    goal: "g",
+    status: "working",
+    entries: [directive, assistant("I read src/a.ts", [{ name: "read", args: { path: "src/a.ts" } }])],
+  });
+  assert.doesNotMatch(first, /Read exactly src\/a\.ts/);
+  assert.match(first, /I read src\/a\.ts/);
+
+  const next = buildView({
+    goal: "g",
+    status: "working",
+    entries: [directive, assistant("I read src/a.ts", [{ name: "read", args: { path: "src/a.ts" } }]), directive],
+    since: 1,
+  });
+  assert.match(next, /# New turns since your last look \(0 of 1\)/);
+  assert.doesNotMatch(next, /Read exactly src\/a\.ts/);
+});
+
 test("bookkeeping tool calls are kept out of the transcript", () => {
   const view = buildView({
     goal: "g",
@@ -244,7 +234,7 @@ test("bookkeeping tool calls are kept out of the transcript", () => {
   assert.match(view, /src\/a\.ts/);
 });
 
-test("buildView reports the goal, the counts, and the problems", () => {
+test("buildView reports the goal, status, and files without historical failures", () => {
   const view = buildView({
     goal: "make the table",
     status: "idle",
@@ -254,9 +244,8 @@ test("buildView reports the goal, the counts, and the problems", () => {
   assert.match(view, /status: idle/);
   assert.match(view, /turns: 2/);
   assert.match(view, /results\.md/);
-  assert.match(view, /bash exit 2/);
+  assert.doesNotMatch(view, /# Problems|bash exit 2/);
 });
-
 test("how long the worker has been quiet, measured from its own last entry", () => {
   // The number wassname asked for after the 2h27m silence: "there have been no turns for this
   // long, is it stuck". Measured from the worker's last message, not from the supervisor's last
@@ -266,8 +255,14 @@ test("how long the worker has been quiet, measured from its own last entry", () 
 
   const stopped = [at("2026-08-14T01:00:00Z"), at("2026-08-14T02:02:18Z")];
   assert.equal(age(sinceLastTurn(stopped, now)), "2h27m", "the real overnight gap, from session 019ffa73");
+  const supervisorMessage: Entry = {
+    type: "message",
+    timestamp: "2026-08-14T04:28:59Z",
+    message: { role: "user", content: "[supervisor] Do not reset the worker clock." },
+  };
+  assert.equal(age(sinceLastTurn([...stopped, supervisorMessage], now)), "2h27m", "a supervisor directive is not worker progress");
 
-  // The last entry wins even when an older one follows it in some other order, and a branch with
+  // The last non-supervisor entry wins even when an older one follows it in some other order, and a branch with
   // no timestamps at all reports 0 rather than throwing.
   assert.equal(age(sinceLastTurn([at("2026-08-14T04:28:30Z")], now)), "30s");
   assert.equal(age(sinceLastTurn([at("2026-08-14T03:44:00Z")], now)), "45m");

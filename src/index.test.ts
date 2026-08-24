@@ -436,7 +436,7 @@ test("a check in and a worker that stopped ask for different things", async () =
   sup.userMessages.length = 0;
   sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal: g\n", stopped: false });
   await new Promise((r) => setTimeout(r, 5));
-  assert.match(sup.userMessages.at(-1)!.content, /Call let_it_run unless this is going somewhere wrong/);
+  assert.match(sup.userMessages.at(-1)!.content, /Call let_it_run unless the view gives concrete evidence/);
 
   sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "# Goal: g\n", stopped: true });
   await new Promise((r) => setTimeout(r, 5));
@@ -1377,7 +1377,7 @@ test("the worker counts reviews in a row where nothing changed", async () => {
   // The pairing view is not a review, so it is dropped here and does not count.
   const views = worker.published.filter((p) => p.t === "view").slice(1);
   assert.doesNotMatch(views[0].view, /reviews in a row/, "the first review has nothing to compare against");
-  assert.match(views[2].view, /no new file, commit or error for 2 reviews in a row/);
+  assert.match(views[2].view, /no new file or commit for 2 reviews in a row/);
 
   entries.push({
     type: "message",

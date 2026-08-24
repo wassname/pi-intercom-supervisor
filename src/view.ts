@@ -7,12 +7,14 @@
  * The body is pi-vcc's compiler, the same algorithmic compactor the worker can run, called here on
  * the live messages with the worker's last compaction summary as previousSummary. So the view is
  * "compaction summary, merged with everything since". We add what a compactor has no reason to
- * track: unanswered tool calls, tool errors, and whether anything changed since the last review.
+ * track: unanswered tool calls and whether anything changed since the last review.
  */
 import { compile } from "@sting8k/pi-vcc/src/core/summarize.ts";
 import { normalize } from "@sting8k/pi-vcc/src/core/normalize.ts";
 import { extractFiles } from "@sting8k/pi-vcc/src/extract/files.ts";
 import { extractCommits } from "@sting8k/pi-vcc/src/extract/commits.ts";
+
+const SUPERVISOR_PREFIX = "[supervisor] ";
 
 /** Entry shapes we read. Only the fields this file touches, taken from real session jsonl. */
 export interface Block {
@@ -45,11 +47,14 @@ export interface Entry {
  * Milliseconds since the worker last put a message in its session.
  *
  * The clock a stuck worker shows on, and the only one that reads the same for both ways of being
- * stuck: sitting at the prompt, and inside one command that never returns. Time since the last
- * look measures the supervisor instead, and understates a worker that stopped hours before.
+ * stuck: sitting at the prompt, and inside one command that never returns. A supervisor directive
+ * does not reset it. Time since the last look measures the supervisor instead, and understates a
+ * worker that stopped hours before.
  */
 export function sinceLastTurn(entries: Entry[], now = Date.now()): number {
-  const last = [...entries].reverse().find((e) => e.type === "message" && e.timestamp);
+  const last = [...entries].reverse().find((e) =>
+    e.type === "message" && e.timestamp && !(e.message?.role === "user" && textOf(e.message).startsWith(SUPERVISOR_PREFIX))
+  );
   return last ? now - Date.parse(last.timestamp!) : 0;
 }
 
@@ -94,33 +99,6 @@ export function outstandingWork(entries: Entry[]): string[] {
   return [...called].filter(([id]) => !answered.has(id)).map(([, name]) => name);
 }
 
-/**
- * Errors the worker has not visibly moved past, most recent last.
- *
- * A later clean result from the same tool clears that tool's earlier errors. Without this, a
- * failure the worker already fixed stays in the view for the rest of a multi-day run, and the
- * supervisor keeps steering about a problem that is gone.
- */
-export function problems(entries: Entry[]): string[] {
-  const byTool = new Map<string, string[]>();
-  for (const entry of entries) {
-    const msg = entry.message;
-    if (!msg || msg.role !== "toolResult") continue;
-    const tool = msg.toolName ?? "tool";
-    const body = textOf(msg).trim();
-    const exit = body.match(/exit(?:ed with)? (?:code )?([1-9]\d*)/i);
-
-    if (msg.isError) {
-      byTool.set(tool, [...(byTool.get(tool) ?? []), `${tool} failed: ${body.slice(0, 200)}`]);
-    } else if (exit) {
-      byTool.set(tool, [...(byTool.get(tool) ?? []), `${tool} exit ${exit[1]}: ${body.slice(0, 200)}`]);
-    } else {
-      byTool.delete(tool); // this tool ran clean since, so its earlier errors are stale
-    }
-  }
-  return [...byTool.values()].flat().slice(-8);
-}
-
 /** The summary written by whichever compactor the worker runs. Empty when it has not compacted. */
 export function compactionSummary(entries: Entry[]): string {
   let summary = "";
@@ -131,36 +109,36 @@ export function compactionSummary(entries: Entry[]): string {
 }
 
 /**
- * What the worker has changed: the files it wrote, and the distinct errors it hit.
+ * What the worker has changed: the files it wrote and the commits it made.
  *
- * Two reviews with the same key mean the last instruction moved nothing. That is evidence for the
- * supervisor, not a rule: re-editing one file while a test still fails looks the same, and is
+ * Two reviews with the same key mean the last instruction produced neither. That is evidence for
+ * the supervisor, not a rule: re-editing one file while a test still fails looks the same, and is
  * sometimes the right thing to be doing.
  *
  * Read from pi-vcc's extractor rather than from its rendered section, which caps the list at ten
- * paths and would freeze this key on any run long enough to matter. Errors are deduplicated,
- * because the same test failing again is not a new error.
+ * paths and would freeze this key on any run long enough to matter.
  */
 export function progressKey(entries: Entry[]): string {
   const blocks = normalize(messagesSince(entries) as any);
   const files = extractFiles(blocks);
   const commits = extractCommits(blocks).map((c) => c.hash ?? c.message);
-  const distinct = [...new Set(problems(entries))].sort();
-  return [[...files.modified].sort(), [...files.created].sort(), commits, distinct.sort()].map((p) => p.join(",")).join("||");
+  return [[...files.modified].sort(), [...files.created].sort(), commits].map((p) => p.join(",")).join("||");
 }
 
 /**
  * Messages after the worker's last compaction.
  *
  * getBranch keeps the entries a compaction replaced, so handing every message to compile alongside
- * the summary would send the supervisor both copies and spend the byte budget twice.
+ * the summary would send the supervisor both copies and spend the byte budget twice. Supervisor
+ * directives already live in the supervisor transcript, so exclude their worker-session echo.
  */
 function messagesSince(entries: Entry[]): AgentMsg[] {
   const lastCompaction = entries.map((e) => e.type).lastIndexOf("compaction");
   return entries
     .slice(lastCompaction + 1)
     .filter((e) => e.type === "message" && e.message)
-    .map((e) => e.message!);
+    .map((e) => e.message!)
+    .filter((message) => message.role !== "user" || !textOf(message).startsWith(SUPERVISOR_PREFIX));
 }
 
 /** What the caller records after a view goes out, and hands back as `since` on the next one. */
@@ -263,14 +241,14 @@ export interface ViewInput {
 /** Render the view, and cut it to MAX_VIEW_BYTES so the broker cannot reject it. */
 export function buildView({ goal, status, entries, since = 0, stale = 0, subagents = [], model = "" }: ViewInput): string {
   const messages = entries.filter((e) => e.type === "message" && e.message);
-  const errors = problems(messages);
   const pending = outstandingWork(messages);
-  const total = turnsSince(entries);
+  const workerMessages = messagesSince(entries);
+  const total = workerMessages.length;
   // A compaction or a rewind leaves the mark past the end. Restart from the compaction and say so,
   // otherwise the supervisor silently reads a slice of the wrong history.
   const restarted = since > total;
   const from = restarted ? 0 : since;
-  const fresh = messagesSince(entries).slice(from);
+  const fresh = workerMessages.slice(from);
   const { headers, brief } = vccSections(fresh);
   const earlier = compactionSummary(entries);
 
@@ -292,10 +270,7 @@ export function buildView({ goal, status, entries, since = 0, stale = 0, subagen
     `turns: ${messages.length}`,
     `tool calls with no result: ${pending.length ? pending.join(", ") : "none"}`,
     `child pi processes still running: ${subagents.length ? subagents.join(", ") : "none"}`,
-    ...(stale > 0 ? [`no new file, commit or error for ${stale} reviews in a row`] : []),
-    ``,
-    `# Problems`,
-    errors.length ? errors.join("\n") : "none",
+    ...(stale > 0 ? [`no new file or commit for ${stale} reviews in a row`] : []),
     ``,
     // Sent when this view starts at the compaction boundary, which is the first view and every
     // view after the worker compacts. In between the supervisor already has it.
@@ -318,7 +293,7 @@ export function buildView({ goal, status, entries, since = 0, stale = 0, subagen
     view = `${head}\n[earlier turns cut to fit the channel]\n${lines.join("\n")}\n`;
   }
   if (Buffer.byteLength(view, "utf-8") <= MAX_VIEW_BYTES) return view;
-  // The head alone can overflow, on a long goal or many problems. The broker drops anything over
+  // The head alone can overflow, on a long goal. The broker drops anything over
   // 16 KiB and never tells the extension, so the supervisor would go blind. Cut, and say so.
   return `${Buffer.from(view, "utf-8").subarray(0, MAX_VIEW_BYTES - 40).toString("utf-8")}\n[view cut here to fit the channel]\n`;
 }

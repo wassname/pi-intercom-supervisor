@@ -200,13 +200,7 @@ worker.`
 
 ${view}
 
-${rounds} instructions so far. Call let_it_run unless this is going somewhere wrong. Interrupting a
-working agent costs it its train of thought, so the bar is real evidence in the view, not a
-tidier plan. Never invent an instruction to have something to say, and never report a fact you
-did not read: a wrong fact is worse than silence.
-
-One exception, in the status line: a worker that is working and has had no new turn for a long time
-is inside one command that is not returning. Ask it what that command is and how long it should take.`;
+Call let_it_run unless the view gives concrete evidence that the worker needs an instruction.`;
 
 /** Refusal shown when done is called while the worker still has work running. */
 export const DONE_BLOCKED = (what: string) =>
@@ -235,7 +229,7 @@ The view line "child pi processes still running" means the worker delegated to a
 still working. It stopped, the subagent did not. Do not call done, it will be refused. Steer the
 worker to wait for that subagent and report what it produced.
 
-The view line "no new file, commit or error for N reviews in a row" means your last N instructions
+The view line "no new file or commit for N reviews in a row" means your last N instructions
 moved nothing the worker's session can show. Two or more is your signal to change approach, ask the
 human, or check whether the goal is already met. Sometimes it is honest work on one file, so read
 the recent turns before you decide.
