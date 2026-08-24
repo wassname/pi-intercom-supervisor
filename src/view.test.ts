@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MAX_VIEW_BYTES, age, buildView, outstandingWork, progressKey, sinceLastTurn, turnsSince, type Entry } from "./view.ts";
+import { MAX_VIEW_BYTES, age, buildView, goalPreview, outstandingWork, progressKey, sinceLastTurn, turnsSince, type Entry } from "./view.ts";
 
 function assistant(text: string, calls: Array<{ name: string; args: Record<string, unknown> }> = []): Entry {
   return {
@@ -18,6 +18,18 @@ function assistant(text: string, calls: Array<{ name: string; args: Record<strin
 function toolResult(toolName: string, text: string, isError = false): Entry {
   return { type: "message", message: { role: "toolResult", toolName, isError, content: [{ type: "text", text }] } };
 }
+
+test("a one-line goal stays whole while a multi-line goal has a locator", () => {
+  assert.equal(goalPreview("fix the parser"), "fix the parser");
+  assert.equal(goalPreview("Build the causal evaluation.\nThe full rubric follows."), "Build the causal evaluation. [...]");
+  const view = buildView({
+    goal: "Build the causal evaluation.\nThe full rubric follows.",
+    status: "idle",
+    entries: [assistant("working")],
+  });
+  assert.match(view, /<goal>\nBuild the causal evaluation\. \[\.\.\.\]\n<\/goal>/);
+  assert.doesNotMatch(view, /The full rubric follows/);
+});
 
 test("a view carries only the turns the supervisor has not been sent", () => {
   // The supervisor is a real session and keeps every view it read, so re-sending the whole

@@ -68,6 +68,14 @@ export function age(ms: number): string {
 
 /** Extension channel payloads cap at 16 KiB, so the view must stay under it. */
 export const MAX_VIEW_BYTES = 15000;
+const GOAL_PREVIEW_CHARS = 160;
+
+/** A long goal remains identifiable in every view without replaying its whole rubric. */
+export function goalPreview(goal: string): string {
+  if (!goal.includes("\n")) return goal || "not set";
+  const firstLine = goal.split("\n").find((line) => line.trim())?.trim() || "not set";
+  return `${firstLine.slice(0, GOAL_PREVIEW_CHARS)} [...]`;
+}
 
 function blocks(msg: AgentMsg): Block[] {
   return Array.isArray(msg.content) ? msg.content : [];
@@ -253,21 +261,16 @@ export function buildView({ goal, status, entries, since = 0, stale = 0, subagen
   const earlier = compactionSummary(entries);
 
   const head = [
-    // Repeated every view on purpose. This is the one reminder that stops the supervisor drifting
-    // onto whatever the worker is doing now. Verbatim: a goal cut at 300 characters ended
-    // mid-word, and a supervisor cannot judge against half a sentence. The byte cut below trims
-    // the transcript instead, which is the part that repeats.
-    //
-    // Tagged, because a real goal runs to several lines and holds its own headings and quotes, so
-    // without a closing mark the reader cannot see where the human stopped typing.
+    // Short goals are the criterion on every review. A multi-line research rubric is reinserted
+    // into the supervisor context at its own cadence, so this view carries only its locator.
     `<goal>`,
-    goal || "not set",
+    goalPreview(goal),
     `</goal>`,
     ``,
     `# Worker`,
     ...(model ? [`model: ${model}`] : []),
     `status: ${status}`,
-    `turns: ${messages.length}`,
+    `turns: ${workerMessages.length}`,
     `tool calls with no result: ${pending.length ? pending.join(", ") : "none"}`,
     `child pi processes still running: ${subagents.length ? subagents.join(", ") : "none"}`,
     ...(stale > 0 ? [`no new file or commit for ${stale} reviews in a row`] : []),

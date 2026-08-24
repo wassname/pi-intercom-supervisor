@@ -110,9 +110,10 @@ extension sees every message. Do not load it in a session you would not trust wi
 Each view carries only the turns since the last one, the way you read the new lines on a screen
 rather than the scrollback. The supervisor is a real session that keeps every view it has read, so
 re-sending the whole transcript would put a second copy of its own context in front of it, and the
-cost would grow with every review. The goal line repeats every time, because that is the reminder
-that stops it drifting onto whatever the worker is doing now. A worker compaction restarts the
-count, and the view says so and carries the summary.
+cost would grow with every review. A one-line goal repeats in full. A multi-line goal shows its
+first line with `[...]`; its complete rubric enters the supervisor context at pairing, goal change,
+reload, supervisor compaction, and before every fifth review. A worker compaction restarts the
+view's turn count, and the view says so and carries the summary.
 
 The view body is [pi-vcc](https://github.com/sting8k/pi-vcc)'s `compile()`, the same algorithmic
 compactor (no LLM calls) you can run as your own. On top of it the view carries what a compactor
@@ -126,9 +127,9 @@ so there first, while it names the approach it is about to retry, before any fil
 changes. Two, cut to the last 400 characters each: one worker session here held 161 reasoning
 blocks, and all of them together would be a second transcript.
 
-The goal is never cut. Cutting it at 300 characters ended a real goal mid-word, and a supervisor
-cannot judge against half a sentence. The byte limit trims the transcript instead, which is the
-part that repeats.
+The complete goal is never cut when it enters the supervisor context. A multi-line goal uses only
+its first line plus `[...]` in ordinary views; that is a locator, while the complete rubric arrives
+at the fixed review cadence. The byte limit trims the transcript instead.
 
 Every view names the worker's model and how full its context is, read off the worker's own intercom
 presence record. Steering a small fast model wants smaller steps than steering a frontier one, and
@@ -178,9 +179,10 @@ processes, so a settled worker with a subagent still running is not called finis
 SUPERVISOR.md precedence.
 
 `src/prompts.ts` holds every word the supervisor reads, in the order it reads them. Only the nudge
-and the view repeat per look; the policy, the verdict rules and the goal are sent once. The verdict
-rules live in the tool descriptions, which the API sends at every model call, so a supervisor
-compaction cannot lose them.
+and the view repeat per look; the policy and verdict rules are sent once. A multi-line goal returns
+at pairing, goal change, reload, compaction, and before every fifth review. The verdict rules live
+in the tool descriptions, which the API sends at every model call, so a supervisor compaction
+cannot lose them.
 
 The process check is a snapshot where the original polls for two minutes. pi awaits the settle
 handler, so polling there holds the worker's own settle for the whole poll. The loop already does

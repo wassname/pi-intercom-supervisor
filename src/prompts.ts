@@ -42,7 +42,8 @@ export const BRIEF = (policy: string, goal: string, worker: string) =>
 You are now supervising the pi session "${worker}".
 
 The goal is between the tags below, exactly as the human typed it. Nothing outside the tags is
-part of the goal, and every view repeats it the same way.
+part of the goal. A multi-line goal appears as a one-line locator in ordinary views. Its full text
+returns after a goal change, reload, compaction, and before every fifth review.
 
 <goal>
 ${goal || "not given, so infer it from the first view you receive and call set_goal"}
@@ -165,8 +166,8 @@ export const TOOL_DONE =
  *
  * What used to be here and is now sent once: the verdict rules (BRIEF, and the tool descriptions,
  * which survive a compaction) and the instructions already sent (the supervisor's own steer calls
- * are in its context; the steer tool warns about a repeat when it happens). The goal stays, one
- * line, inside the view.
+ * are in its context; the steer tool warns about a repeat when it happens). A multi-line goal
+ * stays as a one-line locator inside the view.
  *
  * A check in is not a decision point. Interrupting a working agent is expensive and usually wrong,
  * so the two triggers ask for different things.

@@ -119,6 +119,9 @@ const WATCH_INTERVAL_MS = 1_800_000;
 /** How often the timer checks whether a look is due. Sets how late a look can be, nothing else. */
 const WATCH_POLL_MS = 30_000;
 
+/** A multi-line goal is reinserted before this many supervisor reviews can pass without it. */
+const GOAL_REVIEW_INTERVAL = 5;
+
 /** How many identical timer looks are skipped before the supervisor is shown one anyway. */
 const LOOKS_SKIPPED_MAX = 3;
 
@@ -164,6 +167,8 @@ export default function (pi: any) {
   let workerStopped = false;
   let ctx: any;
   let ownId = "";
+  /** Supervisor side: review views since the full multi-line goal was last inserted. */
+  let reviewsSinceGoal = 0;
   /** Worker side: the last progressKey, and how many reviews in a row have matched it. */
   let lastProgress = "";
   let staleReviews = 0;
@@ -226,6 +231,12 @@ export default function (pi: any) {
    */
   function tellSupervisor(text: string) {
     pi.sendMessage({ customType: "supervisor_brief", content: text, display: true }, { triggerTurn: false });
+  }
+
+  function tellGoal() {
+    if (!state.goal.includes("\n")) return;
+    tellSupervisor(`<goal>\n${state.goal}\n</goal>`);
+    reviewsSinceGoal = 0;
   }
 
   /**
@@ -335,6 +346,7 @@ export default function (pi: any) {
     // session, and the brief goes out only at pairing, so without this a wording fix needs a fresh
     // pairing and loses the supervisor's memory of its own steers.
     tellSupervisor(REANCHOR(state.goal, state.steerRounds));
+    reviewsSinceGoal = 0;
     // Ask for a view rather than wait for one. A supervisor that came back from a crash, a credit
     // failure or a /reload holds a stale picture, and answering from a stale picture is how it
     // invents a fact. Only the worker makes views, so it has to ask, and nobody should have to
@@ -356,6 +368,7 @@ export default function (pi: any) {
     showSupervisorTools(false);
     state = { ...EMPTY_STATE };
     latestView = "";
+    reviewsSinceGoal = 0;
     lastProgress = "";
     staleReviews = 0;
     sentTurns = 0;
@@ -444,6 +457,8 @@ export default function (pi: any) {
     if (wire.t === "view" && state.role === "supervisor") {
       latestView = wire.view;
       workerStopped = wire.stopped;
+      if (reviewsSinceGoal >= GOAL_REVIEW_INTERVAL - 1) tellGoal();
+      else reviewsSinceGoal += 1;
       // A new view is a new look, so it gets its own verdict. agent_start alone is not enough: a
       // followUp is consumed inside the running agent loop, so no second agent_start fires and the
       // count carries over. That aborted the second honest verdict of a busy night. - CLAUDE
@@ -510,6 +525,16 @@ export default function (pi: any) {
         return kept.length ? [{ ...m, content: kept }] : [];
       }),
     };
+  });
+
+  pi.on("session_compact", async (event: { willRetry?: boolean }, context: any) => {
+    ctx = context;
+    // Pi retries overflow recovery immediately after this event. Queue the rubric for its next
+    // ordinary turn, so the failed assistant remains final and can be removed.
+    if (state.role === "supervisor") {
+      if (event.willRetry) reviewsSinceGoal = GOAL_REVIEW_INTERVAL - 1;
+      else tellGoal();
+    }
   });
 
   pi.on("session_start", async (_event: unknown, context: any) => {
@@ -702,6 +727,7 @@ export default function (pi: any) {
         // Tell the supervisor now, and ask for a view, so it judges the new goal at once instead of
         // waiting up to half an hour for the next look.
         tellSupervisor(GOAL_CHANGED(goal));
+        reviewsSinceGoal = 0;
         send({ t: "look", to: state.pairedId });
         context.ui?.notify?.(`goal changed: ${goal}`, "info");
         return;
@@ -720,7 +746,7 @@ export default function (pi: any) {
       // startup, so it is something you can match against a window.
       const describe = (rows: any[]) =>
         rows.map((s: any) => `${s.name ?? "(unnamed)"} ${s.id.slice(0, 8)} in ${s.cwd}`).join(", ") || "none";
-      const [first, ...rest] = text.split(/\s+/);
+      const first = text.split(/\s+/, 1)[0];
 
       // A target is written @name, so nothing has to be guessed from a goal that has spaces in it.
       // Before this, a first word that matched no session was silently swallowed into the goal:
@@ -740,7 +766,7 @@ export default function (pi: any) {
           return;
         }
         worker = match[0];
-        goal = readGoal(context.cwd, rest.join(" "));
+        goal = readGoal(context.cwd, text.slice(first.length).trim());
       } else {
         // Nothing named, so the whole line is the goal and this has to find the worker.
         goal = readGoal(context.cwd, text);
@@ -775,7 +801,15 @@ export default function (pi: any) {
 
       state = { ...EMPTY_STATE, role: "supervisor", pairedId: worker.id, goal };
       latestView = "";
+      reviewsSinceGoal = 0;
       save();
+      const kept = stripWriters();
+      showSupervisorTools(true);
+
+      const { prompt, source } = loadSupervisorPrompt(context.cwd);
+      // The worker publishes its first view while handling pair. Add this non-turn message first,
+      // or that view can wake the supervisor without the rubric it is meant to judge against.
+      tellSupervisor(BRIEF(prompt, goal, target));
       send({ t: "pair", to: state.pairedId, goal });
       // No acknowledgment means the target does not load this extension, or it went away between
       // listSessions and now. Without this the supervisor waits forever for a view and says nothing.
@@ -786,11 +820,6 @@ export default function (pi: any) {
         reset(`intercom-supervisor: ${target} never acknowledged. It probably does not load this extension.`);
       }, PAIR_ACK_TIMEOUT_MS);
 
-      const kept = stripWriters();
-      showSupervisorTools(true);
-
-      const { prompt, source } = loadSupervisorPrompt(context.cwd);
-      tellSupervisor(BRIEF(prompt, goal, target));
       context.ui?.notify?.(`supervising ${target} (policy: ${source}, tools: ${kept.join(", ")})`, "info");
     },
   });
@@ -842,8 +871,9 @@ export default function (pi: any) {
         return { content: [{ type: "text", text: "Not supervising." }], isError: true };
       }
       state = { ...state, goal: params.goal };
+      reviewsSinceGoal = 0;
       save();
-      // The worker holds the copy every view header is built from, so it has to hear this too.
+      // The tool result records this inferred goal in the supervisor context. The worker needs it too.
       send({ t: "goal", to: state.pairedId, goal: params.goal });
       // Announced, not silent: the supervisor's own reply is what reaches the human's phone.
       ctx?.ui?.notify?.(`goal set by the supervisor: ${params.goal}`, "info");

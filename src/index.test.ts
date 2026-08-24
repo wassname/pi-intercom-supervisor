@@ -166,6 +166,9 @@ function harness(
     async agentStart() {
       for (const fn of handlers.get("agent_start") ?? []) await fn({}, ctx);
     },
+    async compact(willRetry = false) {
+      for (const fn of handlers.get("session_compact") ?? []) await fn({ willRetry }, ctx);
+    },
     async run(command: string, args: string) {
       await commands.get(command)!(args, ctx);
     },
@@ -425,6 +428,50 @@ test("the nudge repeats neither the instructions already sent nor the verdict ru
   assert.doesNotMatch(nudge, /instruction \d/, "the supervisor already has its own steer calls");
   assert.match(nudge, new RegExp(`${STEER_MEMORY + 3} instructions so far`), "the count is the cheap part, so it stays");
   assert.ok(nudge.length < 400, `the nudge is sent every look, so it stays short: ${nudge.length} chars`);
+});
+
+test("a multi-line goal returns to supervisor context every fifth review and after compaction", async () => {
+  const goal = "Build the causal evaluation.\nThe full rubric stays here.";
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", `@worker ${goal}`);
+  const atPairing = sup.contextMessages.length;
+  assert.match(sup.contextMessages.at(-1)!.content, /<goal>\nBuild the causal evaluation\.\nThe full rubric stays here\.\n<\/goal>/);
+
+  for (let i = 0; i < 4; i++) {
+    sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: `view ${i}`, stopped: true });
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.equal(sup.contextMessages.length, atPairing, "the brief already gave the supervisor the full goal");
+
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "view 4", stopped: true });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.match(sup.contextMessages.at(-1)!.content, /<goal>\nBuild the causal evaluation\.\nThe full rubric stays here\.\n<\/goal>/);
+
+  const afterReview = sup.contextMessages.length;
+  await sup.compact();
+  assert.equal(sup.contextMessages.length, afterReview + 1);
+  assert.match(sup.contextMessages.at(-1)!.content, /The full rubric stays here/);
+
+  const afterCompaction = sup.contextMessages.length;
+  await sup.compact(true);
+  assert.equal(sup.contextMessages.length, afterCompaction, "overflow recovery removes its failed reply after session_compact");
+  sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "view after recovery", stopped: true });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.match(sup.contextMessages.at(-1)!.content, /The full rubric stays here/, "the next ordinary review restores the rubric");
+});
+
+test("a one-line goal is not redundantly reinserted", async () => {
+  const sup = harness(SUPER_ID);
+  await sup.start();
+  await sup.run("supervise", "@worker fix the parser");
+  const atPairing = sup.contextMessages.length;
+
+  for (let i = 0; i < 5; i++) {
+    sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: `view ${i}`, stopped: true });
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.equal(sup.contextMessages.length, atPairing);
 });
 
 test("a check in and a worker that stopped ask for different things", async () => {
