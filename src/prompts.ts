@@ -111,11 +111,11 @@ A fresh view follows. Answer it with one tool call: steer, done or let_it_run.`;
  * so they are the only instructions here that a supervisor compaction cannot lose.
  */
 export const TOOL_LET_IT_RUN =
-  "The worker is on track and needs no instruction. The usual answer at a check in. Costs nothing and reaches nobody."
-  + " Call it once and then stop. The next view wakes you by itself."
+  "Use when the current worker view gives quoted evidence that no instruction is needed."
+  + " The call sends no message to the worker. Call it once, then end the current supervisor response."
   // Repeated here because a tool description survives a compaction and the brief does not. The
   // live failure was a let_it_run reasoned "human is actively directing", two hours before dawn.
-  + " The human being present is never the reason: they stop you themselves when they want you stopped.";
+  + " A human message does not end supervision; only an explicit stop command ends supervision.";
 
 /**
  * How a look ends, and it must appear in every verdict's result.
@@ -128,11 +128,11 @@ export const TOOL_LET_IT_RUN =
  * 22 of 22 steers in the fifteen hours after.
  */
 export const END_TURN =
-  `End your turn now: write one short line, or nothing at all, and call no further tool.`;
+  `End the current supervisor response now: write one short line or no text, then make no further tool call.`;
 
 export const LET_IT_RUN_ACK = (reason: string, workerStopped = false) =>
-  `Letting it run: ${reason}\n\nRecorded, and the worker was not touched. This look is finished. ${END_TURN}
-${workerStopped ? STOPPED_WARNING : "The next view wakes you."}`;
+  `No supervisor instruction was sent for the current worker view. Supervisor-provided reason, not independently verified: ${reason}\n\nThe supervisor has completed its verdict for the current worker view. ${END_TURN}
+${workerStopped ? STOPPED_WARNING : "A later worker view starts the next supervisor review."}`;
 
 /**
  * Added to the let_it_run result when the view said the worker had stopped.
@@ -143,21 +143,21 @@ ${workerStopped ? STOPPED_WARNING : "The next view wakes you."}`;
  * this says why that look will show the same thing.
  */
 export const STOPPED_WARNING =
-  `Note: that view said the worker has stopped. A stopped worker does not start again by itself, so
-letting it run leaves it stopped. If the goal is not met, steer. A human message in the view is not
-somebody else driving it: they go to bed, and the worker stays stopped. You will be shown this
-worker again shortly either way.`;
+  `The current worker view reports that worker execution stopped. A stopped worker does not resume
+without a new user or supervisor message. If the goal remains unmet, send a concrete continuation
+instruction. A human message does not end supervision. A later worker view will report the worker state.`;
 
 /** The answer to a second let_it_run in one look. Costs a round trip and no error line. */
 export const LET_IT_RUN_AGAIN =
-  `Already recorded for this view, so this call did nothing. One verdict is all a look needs.
-${END_TURN}`;
+  `The supervisor already recorded a verdict for the current worker view. This second let_it_run call
+sent no instruction. ${END_TURN}`;
 
-/** The answer to a steer that reached the worker. The warning about a repeat is appended after it. */
-export const STEER_ACK = (round: number) =>
-  `Steered. That is instruction ${round}. The worker has it, and this look is finished. ${END_TURN}`;
+/** The answer after a supervisor directive is sent. A repeat warning is appended after it. */
+export const STEER_ACK = (round: number, workerId: string) =>
+  `Supervisor instruction ${round} was sent to worker session ${workerId}. Worker receipt and execution
+are not confirmed. The supervisor has completed its verdict for the current worker view. ${END_TURN}`;
 export const TOOL_STEER =
-  "Send one concrete next action to the worker. It arrives as a user message in the worker session, so it interrupts.";
+  "Send one concrete next action to the worker. The extension sends the message to the paired worker session; worker receipt and execution require a later worker view.";
 export const TOOL_DONE =
   "Declare the goal met and stop supervising. Only call this with quoted evidence from the view.";
 

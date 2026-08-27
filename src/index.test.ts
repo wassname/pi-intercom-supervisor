@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { copyFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { INTERCOM_EXTENSION_REGISTER_EVENT } from "pi-intercom/extension-api.ts";
+const INTERCOM_EXTENSION_REGISTER_EVENT = "intercom:extension-register";
 import extension from "./index.ts";
 import { buildView } from "./view.ts";
 import { STATE_ENTRY, STEER_MEMORY, isWire, overlap, restoreState } from "./protocol.ts";
@@ -602,10 +602,10 @@ test("let_it_run says the turn is over, so it is not called four times running",
 
   const result = await sup.tools.get("let_it_run")!.execute("id", { reason: "job 291 is at 305 of 600" }, undefined, undefined, sup.ctx);
   assert.match(result.content[0].text, /job 291 is at 305 of 600/, "the reason is still recorded");
-  assert.match(result.content[0].text, /This look is finished/);
+  assert.match(result.content[0].text, /completed its verdict for the current worker view/);
   // The result must name a way to end the turn. "Say nothing more" named none, and a model that
   // may not write text can only call another tool, which is what session 019ffa73 did every look.
-  assert.match(result.content[0].text, /write one short line, or nothing at all/);
+  assert.match(result.content[0].text, /write one short line or no text/);
   assert.doesNotMatch(result.content[0].text, /Say nothing more/);
 });
 
@@ -626,7 +626,7 @@ test("a sign-off verdict is answered, not aborted, and a runaway is still cut", 
 
   const again = await letItRun.execute("id", { reason: "waiting for Evidence-b" }, undefined, undefined, sup.ctx);
   assert.equal(sup.aborts.length, 0, "a sign-off must not end the look in an error line");
-  assert.match(again.content[0].text, /Already recorded for this view/);
+  assert.match(again.content[0].text, /already recorded a verdict for the current worker view/);
   assert.equal(again.isError, undefined, "a repeat did nothing, and doing nothing is not an error");
 
   // A runaway is a count no sign-off explains.
@@ -652,12 +652,12 @@ test("every verdict result names the way to end the turn, steer included", async
   await sup.agentStart();
 
   const steered = await sup.tools.get("steer")!.execute("id", { message: "read the log" }, undefined, undefined, sup.ctx);
-  assert.match(steered.content[0].text, /That is instruction 1/);
-  assert.match(steered.content[0].text, /call no further tool/, "a steer result must name the exit too");
+  assert.match(steered.content[0].text, /Supervisor instruction 1 was sent to worker session session-worker/);
+  assert.match(steered.content[0].text, /no further tool call/, "a steer result must name the exit too");
 
   await sup.agentStart();
   const ran = await sup.tools.get("let_it_run")!.execute("id", { reason: "on track" }, undefined, undefined, sup.ctx);
-  assert.match(ran.content[0].text, /call no further tool/);
+  assert.match(ran.content[0].text, /no further tool call/);
 });
 
 test("an old view is dropped from context once its verdict is in, and the verdict is kept", async () => {
@@ -1277,7 +1277,7 @@ test("a human message in the worker session is not a reason to stand back", asyn
   await sup.run("supervise", "@worker make the results table");
 
   assert.match(sup.contextMessages.at(-1)!.content, /not a handover, and it is not a reason to stand back/);
-  assert.match(sup.tools.get("let_it_run")!.description, /human being present is never the reason/);
+  assert.match(sup.tools.get("let_it_run")!.description, /A human message does not end supervision/);
 
   // And on the view that carries a stopped worker, where the excuse actually got used.
   sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "worker view", stopped: true });
@@ -1302,8 +1302,8 @@ test("letting a stopped worker run says plainly that the worker stays stopped", 
   sup.deliver(WORKER_ID, { t: "view", to: SUPER_ID, view: "job 12 finished", stopped: true });
   await new Promise((r) => setTimeout(r, 5));
   const stopped = await letItRun.execute("id", { reason: "waiting for the worker to re-queue" }, undefined, undefined, sup.ctx);
-  assert.match(stopped.content[0].text, /A stopped worker does not start again by itself/);
-  assert.match(stopped.content[0].text, /steer/, "and it names the verdict that would actually move the worker");
+  assert.match(stopped.content[0].text, /A stopped worker does not resume\s+without a new user or supervisor message/);
+  assert.match(stopped.content[0].text, /send a concrete continuation\s+instruction/, "the warning names the action that can move the worker");
 });
 
 test("a stopped worker is looked at again, so let_it_run cannot silence the pairing", async (t) => {

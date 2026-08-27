@@ -18,7 +18,6 @@ import type {
 /**
  * Copied from pi-intercom/extension-api.ts, because a git install gets no node_modules/pi-intercom
  * and a value import from it fails at load. The types above are erased, so they cost nothing.
- * src/index.test.ts imports the real constant, so a rename in pi-intercom fails a test here.
  */
 const INTERCOM_EXTENSION_REGISTER_EVENT = "intercom:extension-register";
 import { age, buildView, progressKey, sinceLastTurn, turnsSince } from "./view.ts";
@@ -927,7 +926,7 @@ Tell them in your reply, quoting it, so they can correct it.`,
         ? `\nThis says much the same as instruction ${repeat.n}: "${repeat.old}"\nIf the next view shows nothing new, say what evidence makes repeating it worth another round, or change approach.`
         : "";
       endLook(context);
-      return { content: [{ type: "text", text: `${STEER_ACK(state.steerRounds)}${warning}` }] };
+      return { content: [{ type: "text", text: `${STEER_ACK(state.steerRounds, state.pairedId)}${warning}` }] };
     },
   });
 
@@ -943,7 +942,7 @@ Tell them in your reply, quoting it, so they can correct it.`,
     name: "let_it_run",
     label: "Let the worker run",
     description: TOOL_LET_IT_RUN,
-    parameters: Type.Object({ reason: Type.String({ description: "What in the view says it is on track, in one line." }) }),
+    parameters: Type.Object({ reason: Type.String({ description: "Quote the exact worker-view text supporting no instruction. Do not infer future work or worker state." }) }),
     execute: async (_id: string, params: { reason: string }, _signal: unknown, _update: unknown, context: any) => {
       if (state.role !== "supervisor") {
         return { content: [{ type: "text", text: "Not supervising." }], isError: true };
