@@ -1,16 +1,16 @@
 {
-  "name": "@wassname2/pi-intercom-supervisor",
-  "version": "0.0.2",
-  "description": "pi extension: a supervisor pi session watches a worker pi session over pi-intercom, and steers it",
+  "name": "@wassname2/pi-supervise",
+  "version": "0.0.3",
+  "description": "pi extension: supervised pi sessions",
   "author": "wassname",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/wassname/pi-intercom-supervisor.git"
+    "url": "git+https://github.com/wassname/pi-supervise.git"
   },
-  "homepage": "https://github.com/wassname/pi-intercom-supervisor#readme",
+  "homepage": "https://github.com/wassname/pi-supervise#readme",
   "bugs": {
-    "url": "https://github.com/wassname/pi-intercom-supervisor/issues"
+    "url": "https://github.com/wassname/pi-supervise/issues"
   },
   "keywords": [
     "pi-package",
