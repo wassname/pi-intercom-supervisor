@@ -1,6 +1,6 @@
 {
   "name": "@wassname2/pi-intercom-supervisor",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "pi extension: a supervisor pi session watches a worker pi session over pi-intercom, and steers it",
   "author": "wassname",
   "type": "module",
@@ -22,7 +22,9 @@
     "multi-agent"
   ],
   "pi": {
-    "extensions": ["./src/index.ts"],
+    "extensions": [
+      "./src/index.ts"
+    ],
     "image": "https://cdn.jsdelivr.net/gh/wassname/pi-intercom-supervisor@main/media/screenshot.png"
   },
   "files": [
