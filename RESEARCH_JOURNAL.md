@@ -203,3 +203,19 @@ pairing as dead over it. And `errorMessage` lives at `.message.errorMessage`, no
 so my first jq pass returned zero aborts for a session that a raw `grep -c aborted` put at sixteen.
 Both are the same failure: an empty result from a query I had not validated, read as a fact about
 the world.
+
+## 2026-09-05 -- visitable supervision and documented lifecycle
+
+This entry records a correction from the pi-goals pairing session about how supervision should appear and how agents should choose the runtime design.
+
+The user said in that session:
+
+> "yes but I also want minimal simple maintainable code, so we offload to the excellent pi-subagents and pi-intercom and pi-vcc where it makes sense"
+
+> "can we just make it a persistant subagent I can visit?"
+
+The user asked that I read the relevant documentation before proposing lifecycle changes and record durable preference notes when needed.
+
+The installed pi-subagents observability documentation says that FleetView shows active children below the editor and that `/subagents-fleet` can inspect active and recent async children, including their transcripts. The same documentation says that Herdr is optional and only adds a raw inspector pane. The execution documentation says that an async resume starts a new child session from stored context rather than resuming the original process.
+
+My read is that a supervisor should use the ordinary pi-subagents lifecycle and FleetView first, because that is the maintained visitable surface. Do not replace it with a custom persistent-process design or treat missing Herdr as a blocker. Use pi-intercom only for communication that crosses separate Pi sessions, and pi-vcc only when a compact parent-context handoff is actually needed. Before proposing a lifecycle change, read the relevant package documentation and distinguish documented behaviour from an inference. -- PI/Codex
