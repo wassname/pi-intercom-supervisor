@@ -6,7 +6,7 @@ import { copyFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const INTERCOM_EXTENSION_REGISTER_EVENT = "intercom:extension-register";
-import extension from "./index.ts";
+import extension, { PROGRAMMATIC_PAIR_EVENT } from "./index.ts";
 import { buildView } from "./view.ts";
 import { STATE_ENTRY, STEER_MEMORY, isWire, overlap, restoreState } from "./protocol.ts";
 
@@ -176,6 +176,11 @@ function harness(
     deliver(fromSessionId: string, payload: unknown) {
       onEvent({ type: "message", fromSessionId, payload });
     },
+    pair(workerIntercomId: string, goal: string) {
+      return new Promise<void>((resolve, reject) => {
+        bus.emit(PROGRAMMATIC_PAIR_EVENT, { version: 1, workerIntercomId, goal, resolve, reject });
+      });
+    },
     /** Fired before every model call. Returns what the model would actually be sent. */
     async context(messages: any[]) {
       let out = messages;
@@ -267,6 +272,16 @@ test("only the paired worker can end a run", async () => {
 
   const steer = await sup.tools.get("steer")!.execute("id", { message: "carry on" }, undefined, undefined, sup.ctx);
   assert.ok(!steer.isError, `supervision must still be running, got ${steer.content[0].text}`);
+});
+
+test("the programmatic pairing API waits for the worker acknowledgement", async () => {
+  const supervisor = harness(SUPER_ID);
+  await supervisor.start();
+  const paired = supervisor.pair(WORKER_ID, "make the table");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(supervisor.published.filter((payload) => payload.t === "pair"), [{ t: "pair", to: WORKER_ID, goal: "make the table" }]);
+  supervisor.deliver(WORKER_ID, { t: "paired", to: SUPER_ID });
+  await paired;
 });
 
 test("the worker acknowledges a pair, so the supervisor knows it was heard", async () => {

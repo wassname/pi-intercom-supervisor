@@ -20,6 +20,15 @@ import type {
  * and a value import from it fails at load. The types above are erased, so they cost nothing.
  */
 const INTERCOM_EXTENSION_REGISTER_EVENT = "intercom:extension-register";
+export const PROGRAMMATIC_PAIR_EVENT = "pi-supervise:pair:v1";
+
+export interface ProgrammaticPairRequest {
+  version: 1;
+  workerIntercomId: string;
+  goal: string;
+  resolve(): void;
+  reject(error: Error): void;
+}
 import { age, buildView, progressKey, sinceLastTurn, turnsSince } from "./view.ts";
 import { childPiProcesses } from "./subagents.ts";
 import {
@@ -185,6 +194,10 @@ export default function (pi: any) {
   let removedWriters: string[] = [];
   /** Supervisor side: who answered the roll call, collected only while /supervise is waiting. */
   let rollCall: Set<string> | undefined;
+  /** A caller using PROGRAMMATIC_PAIR_EVENT waits for this explicit worker acknowledgement. */
+  let pendingPair: { workerId: string; resolve(): void; reject(error: Error): void } | undefined;
+  let resolveIntercomConnected!: () => void;
+  const intercomConnected = new Promise<void>((resolve) => { resolveIntercomConnected = resolve; });
 
   /** PI_SUPERVISOR_DEBUG=1 traces the wire to stderr. The channel is invisible in transcripts. */
   const debug = (event: string, detail: unknown = {}) => {
@@ -354,10 +367,19 @@ export default function (pi: any) {
     ctx?.ui?.notify?.(`intercom-supervisor: still supervising ${state.pairedId.slice(0, 8)}, asked it for a view`, "info");
   }
 
+  function finishPair(error?: Error) {
+    const pending = pendingPair;
+    pendingPair = undefined;
+    if (!pending) return;
+    if (error) pending.reject(error);
+    else pending.resolve();
+  }
+
   /** Everything that ends a pairing goes through here, so no stale view or timer survives it. */
   function reset(note: string) {
     clearTimeout(pairTimer);
     pairTimer = undefined;
+    finishPair(new Error(note));
     clearInterval(watchTimer);
     watchTimer = undefined;
     if (removedWriters.length) {
@@ -423,6 +445,7 @@ export default function (pi: any) {
     if (wire.t === "paired" && state.role === "supervisor") {
       clearTimeout(pairTimer);
       pairTimer = undefined;
+      finishPair();
       return;
     }
 
@@ -548,9 +571,16 @@ export default function (pi: any) {
       ownerEligible: false,
       onReady: (value: IntercomExtensionChannel) => {
         channel = value;
+        if (!value.snapshot().connected) return;
+        resolveIntercomConnected();
         rejoinOrDrop().catch((err: Error) => debug("rejoin failed", { error: err.message }));
       },
       onEvent: (event: IntercomExtensionEvent) => {
+        if (event.type === "connection" && event.connected) {
+          resolveIntercomConnected();
+          rejoinOrDrop().catch((err: Error) => debug("rejoin failed", { error: err.message }));
+          return;
+        }
         if (event.type === "message" && isWire(event.payload)) {
           // Not awaited by the caller, so a rejection here would be an unhandled rejection with no
           // notice. resolveOwnId throws during a startup race.
@@ -685,6 +715,47 @@ export default function (pi: any) {
 
   // ---- supervisor side: one command and three tools ---------------------------------------
 
+  function startPair(worker: any, goal: string, context: any): Promise<void> {
+    if (!channel) throw new Error("intercom-supervisor: intercom is not connected");
+    if (state.role !== "none") throw new Error(`intercom-supervisor: already paired with ${state.pairedId.slice(0, 8)} as ${state.role}`);
+    const target = worker.name ?? worker.id.slice(0, 8);
+    state = { ...EMPTY_STATE, role: "supervisor", pairedId: worker.id, goal };
+    latestView = "";
+    reviewsSinceGoal = 0;
+    save();
+    const kept = stripWriters();
+    showSupervisorTools(true);
+
+    const { prompt, source } = loadSupervisorPrompt(context.cwd);
+    tellSupervisor(BRIEF(prompt, goal, target));
+    send({ t: "pair", to: state.pairedId, goal });
+    const acknowledgement = new Promise<void>((resolve, reject) => {
+      pendingPair = { workerId: worker.id, resolve, reject };
+    });
+    pairTimer = setTimeout(() => {
+      send({ t: "unpair", to: state.pairedId });
+      reset(`intercom-supervisor: ${target} never acknowledged. It probably does not load this extension.`);
+    }, PAIR_ACK_TIMEOUT_MS);
+    context.ui?.notify?.(`supervising ${target} (policy: ${source}, tools: ${kept.join(", ")})`, "info");
+    return acknowledgement;
+  }
+
+  async function pairPublishedWorker(workerIntercomId: string, goal: string, context: any): Promise<void> {
+    await intercomConnected;
+    const me = await resolveOwnId();
+    if (workerIntercomId === me) throw new Error("intercom-supervisor: cannot supervise this session");
+    const worker = (await channel!.listSessions()).find((session: any) => session.id === workerIntercomId);
+    if (!worker) throw new Error(`intercom-supervisor: worker ${workerIntercomId.slice(0, 8)} is not connected`);
+    await startPair(worker, readGoal(context.cwd, goal), context);
+  }
+
+  pi.events.on(PROGRAMMATIC_PAIR_EVENT, (raw: unknown) => {
+    const request = raw as Partial<ProgrammaticPairRequest>;
+    if (request.version !== 1 || typeof request.workerIntercomId !== "string" || !request.workerIntercomId || typeof request.goal !== "string" || !request.goal.trim() || typeof request.resolve !== "function" || typeof request.reject !== "function") return;
+    pairPublishedWorker(request.workerIntercomId, request.goal, ctx)
+      .then(request.resolve, (error: unknown) => request.reject(error instanceof Error ? error : new Error(String(error))));
+  });
+
   pi.registerCommand("supervise", {
     description: "Supervise the other pi session here: /supervise [goal or path to a goal file], /supervise @name [goal], /supervise goal <new goal>, /supervise look, /supervise stop",
     handler: async (args: string, context: any) => {
@@ -796,30 +867,7 @@ export default function (pi: any) {
           worker = ordered[labels.indexOf(picked)];
         }
       }
-      const target = worker.name ?? worker.id.slice(0, 8);
-
-      state = { ...EMPTY_STATE, role: "supervisor", pairedId: worker.id, goal };
-      latestView = "";
-      reviewsSinceGoal = 0;
-      save();
-      const kept = stripWriters();
-      showSupervisorTools(true);
-
-      const { prompt, source } = loadSupervisorPrompt(context.cwd);
-      // The worker publishes its first view while handling pair. Add this non-turn message first,
-      // or that view can wake the supervisor without the rubric it is meant to judge against.
-      tellSupervisor(BRIEF(prompt, goal, target));
-      send({ t: "pair", to: state.pairedId, goal });
-      // No acknowledgment means the target does not load this extension, or it went away between
-      // listSessions and now. Without this the supervisor waits forever for a view and says nothing.
-      pairTimer = setTimeout(() => {
-        // Unpair first, in case the worker did pair and only the acknowledgment went missing.
-        // Otherwise it would keep publishing views to a supervisor that has already given up.
-        send({ t: "unpair", to: state.pairedId });
-        reset(`intercom-supervisor: ${target} never acknowledged. It probably does not load this extension.`);
-      }, PAIR_ACK_TIMEOUT_MS);
-
-      context.ui?.notify?.(`supervising ${target} (policy: ${source}, tools: ${kept.join(", ")})`, "info");
+      void startPair(worker, goal, context).catch(() => {});
     },
   });
 

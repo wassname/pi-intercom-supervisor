@@ -1,6 +1,6 @@
 {
   "name": "@wassname2/pi-supervise",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "pi extension: supervised pi sessions",
   "author": "wassname",
   "type": "module",
