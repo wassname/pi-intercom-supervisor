@@ -6,9 +6,34 @@ import { copyFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const INTERCOM_EXTENSION_REGISTER_EVENT = "intercom:extension-register";
+const INTERCOM_EXTENSION_REGISTRY_READY_EVENT = "intercom:extension-registry-ready";
 import extension, { PROGRAMMATIC_PAIR_EVENT } from "./index.ts";
 import { buildView } from "./view.ts";
 import { STATE_ENTRY, STEER_MEMORY, isWire, overlap, restoreState } from "./protocol.ts";
+
+test("retries intercom registration when pi-intercom loads after pi-supervise", () => {
+  const bus = new EventEmitter();
+  const registrations: unknown[] = [];
+  const pi = {
+    events: {
+      emit: (name: string, value: unknown) => bus.emit(name, value),
+      on: (name: string, handler: (...args: any[]) => void) => bus.on(name, handler),
+    },
+    on() {},
+    registerCommand() {},
+    registerTool() {},
+    appendEntry() {},
+    getActiveTools: () => [],
+    setActiveTools() {},
+    sendMessage() {},
+    sendUserMessage() {},
+  };
+  extension(pi);
+  bus.on(INTERCOM_EXTENSION_REGISTER_EVENT, (registration) => registrations.push(registration));
+  bus.emit(INTERCOM_EXTENSION_REGISTRY_READY_EVENT, { version: 1 });
+  bus.emit(INTERCOM_EXTENSION_REGISTRY_READY_EVENT, { version: 1 });
+  assert.equal(registrations.length, 1);
+});
 
 test("a directive with no text is rejected, so the worker never sees undefined", () => {
   assert.equal(isWire({ t: "directive", to: "x", text: "do it" }), true);

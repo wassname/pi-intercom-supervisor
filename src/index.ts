@@ -20,7 +20,11 @@ import type {
  * and a value import from it fails at load. The types above are erased, so they cost nothing.
  */
 const INTERCOM_EXTENSION_REGISTER_EVENT = "intercom:extension-register";
+const INTERCOM_EXTENSION_REGISTRY_READY_EVENT = "intercom:extension-registry-ready";
 export const PROGRAMMATIC_PAIR_EVENT = "pi-supervise:pair:v1";
+export const WORKER_STATE_EVENT = "pi-supervise:worker-state:v1";
+export const WORKER_PAIRED_EVENT = "pi-supervise:worker-paired:v1";
+export const API_READY_EVENT = "pi-supervise:api-ready:v1";
 
 export interface ProgrammaticPairRequest {
   version: 1;
@@ -169,6 +173,8 @@ const SUPERVISOR_TOOLS = ["worker_view", "set_goal", "steer", "let_it_run", "don
 
 export default function (pi: any) {
   let channel: IntercomExtensionChannel | undefined;
+  let intercomRegistered = false;
+  let sessionInitialized = false;
   let state: SuperviseState = { ...EMPTY_STATE };
   let latestView = "";
   /** Supervisor side: whether the worker was stopped in that view, which changes what let_it_run costs. */
@@ -430,6 +436,7 @@ export default function (pi: any) {
       staleReviews = 0;
       save();
       send({ t: "paired", to: from });
+      pi.events.emit(WORKER_PAIRED_EVENT, { supervisorIntercomId: from });
       ctx?.ui?.notify?.(`supervised by ${from.slice(0, 8)}: ${firstLine(wire.goal)}`, "info");
       // A first view goes with the acknowledgement. Without it the supervisor's opening turn has
       // nothing to read, and it answers anyway: on 2026-08-13 it called let_it_run 98 times over
@@ -559,38 +566,62 @@ export default function (pi: any) {
     }
   });
 
-  pi.on("session_start", async (_event: unknown, context: any) => {
+  const intercomRegistration = {
+    namespace: NAMESPACE,
+    ownerEligible: false,
+    onReady: (value: IntercomExtensionChannel) => {
+      channel = value;
+      if (!value.snapshot().connected) return;
+      resolveIntercomConnected();
+      if (ctx) rejoinOrDrop().catch((err: Error) => debug("rejoin failed", { error: err.message }));
+    },
+    onEvent: (event: IntercomExtensionEvent) => {
+      if (event.type === "connection" && event.connected) {
+        resolveIntercomConnected();
+        if (ctx) rejoinOrDrop().catch((err: Error) => debug("rejoin failed", { error: err.message }));
+        return;
+      }
+      if (event.type === "message" && isWire(event.payload)) {
+        // Not awaited by the caller, so a rejection here would be an unhandled rejection with no
+        // notice. resolveOwnId throws during a startup race.
+        onWire(event.fromSessionId, event.payload).catch((err: Error) => {
+          debug("wire dropped", { error: err.message });
+          ctx?.ui?.notify?.(`intercom-supervisor: dropped a message, ${err.message}`, "error");
+        });
+      }
+    },
+  };
+
+  function registerIntercom() {
+    if (intercomRegistered || channel) return;
+    intercomRegistered = pi.events.emit(INTERCOM_EXTENSION_REGISTER_EVENT, intercomRegistration);
+  }
+
+  pi.events.on(INTERCOM_EXTENSION_REGISTRY_READY_EVENT, registerIntercom);
+  registerIntercom();
+
+  function initializeSession(context: any) {
     ctx = context;
+    if (sessionInitialized) return;
+    sessionInitialized = true;
     state = restoreState(context.sessionManager.getEntries());
     // Before anything else, because a worker that can see steer and worker_view starts guessing
     // that it is a supervisor. rejoinOrDrop below may still drop the pairing and hide them again.
     showSupervisorTools(state.role === "supervisor");
     showStatus(); // a resumed pairing has no notice to read, so the footer is all you get
-    pi.events.emit(INTERCOM_EXTENSION_REGISTER_EVENT, {
-      namespace: NAMESPACE,
-      ownerEligible: false,
-      onReady: (value: IntercomExtensionChannel) => {
-        channel = value;
-        if (!value.snapshot().connected) return;
-        resolveIntercomConnected();
-        rejoinOrDrop().catch((err: Error) => debug("rejoin failed", { error: err.message }));
-      },
-      onEvent: (event: IntercomExtensionEvent) => {
-        if (event.type === "connection" && event.connected) {
-          resolveIntercomConnected();
-          rejoinOrDrop().catch((err: Error) => debug("rejoin failed", { error: err.message }));
-          return;
-        }
-        if (event.type === "message" && isWire(event.payload)) {
-          // Not awaited by the caller, so a rejection here would be an unhandled rejection with no
-          // notice. resolveOwnId throws during a startup race.
-          onWire(event.fromSessionId, event.payload).catch((err: Error) => {
-            debug("wire dropped", { error: err.message });
-            ctx?.ui?.notify?.(`intercom-supervisor: dropped a message, ${err.message}`, "error");
-          });
-        }
-      },
-    });
+    if (channel?.snapshot().connected) {
+      resolveIntercomConnected();
+      rejoinOrDrop().catch((err: Error) => debug("rejoin failed", { error: err.message }));
+    }
+  }
+
+  pi.on("session_start", async (_event: unknown, context: any) => {
+    initializeSession(context);
+    registerIntercom();
+  });
+  pi.on("before_agent_start", async (_event: unknown, context: any) => {
+    initializeSession(context);
+    registerIntercom();
   });
 
   /**
@@ -748,6 +779,12 @@ export default function (pi: any) {
     if (!worker) throw new Error(`intercom-supervisor: worker ${workerIntercomId.slice(0, 8)} is not connected`);
     await startPair(worker, readGoal(context.cwd, goal), context);
   }
+
+  pi.events.on(WORKER_STATE_EVENT, (reply: (state: { intercomId: string; paired: boolean }) => void) => {
+    if (typeof reply !== "function") return;
+    resolveOwnId().then((intercomId) => reply({ intercomId, paired: state.role === "worker" }));
+  });
+  pi.events.emit(API_READY_EVENT, { version: 1 });
 
   pi.events.on(PROGRAMMATIC_PAIR_EVENT, (raw: unknown) => {
     const request = raw as Partial<ProgrammaticPairRequest>;
