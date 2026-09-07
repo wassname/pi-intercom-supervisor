@@ -123,10 +123,13 @@ const SUBAGENT_ENV = "PI_SUBAGENT_CHILD";
  * How often the supervisor looks at a worker that is still working. It also looks when the worker
  * stops, whatever this is set to, so a short turn is never missed.
  *
- * One supervisor turn per interval per busy worker, so this is the token bill of watching. Half an
- * hour is the wandering-past rate a human keeps; shorten it if you want a closer eye.
+ * One supervisor turn per interval per busy worker, so this is the token bill of watching. One hour
+ * is the default review cadence; settle and turn-count reviews still arrive sooner.
  */
-const WATCH_INTERVAL_MS = 1_800_000;
+const WATCH_INTERVAL_MS = 3_600_000;
+
+/** Send a fresh worker view after this many session messages since the prior review. */
+const TURN_REVIEW_INTERVAL = 50;
 
 /** How often the timer checks whether a look is due. Sets how late a look can be, nothing else. */
 const WATCH_POLL_MS = 30_000;
@@ -705,6 +708,15 @@ export default function (pi: any) {
     // survive: the footer had not mounted yet, and nothing redraws it until the next save().
     showStatus();
     startWatch();
+    if (state.role !== "worker" || !channel) return;
+    const turns = turnsSince(context.sessionManager.getBranch() as any);
+    if (turns - sentTurns < TURN_REVIEW_INTERVAL) return;
+    try {
+      await publishView(context, `${TURN_REVIEW_INTERVAL} turns since the prior review`, sentTurns, true);
+    } catch (error) {
+      debug("turn review failed", { error: (error as Error).message });
+      context.ui?.notify?.(`intercom-supervisor: could not send the turn review, ${(error as Error).message}`, "error");
+    }
   });
 
   /** Fires only when no retry, compaction, or queued continuation will run, so the worker is truly done. */

@@ -1277,7 +1277,7 @@ test("supervising a second session is refused while the first is still paired", 
   assert.match(sup.notices.join("\n"), /already paired/);
 });
 
-test("the supervisor gets a look at a working worker every half hour, without being asked", async (t) => {
+test("the supervisor gets a look at a working worker every hour, without being asked", async (t) => {
   // A human supervising wanders past now and then. Waiting for the worker to stop is the thing
   // this is meant to replace.
   t.mock.timers.enable({ apis: ["setInterval", "Date"] });
@@ -1288,14 +1288,13 @@ test("the supervisor gets a look at a working worker every half hour, without be
   const atPairing = worker.published.filter((p) => p.t === "view").length;
 
   await worker.turnStart();
-  t.mock.timers.tick(1_500_000);
-  assert.equal(worker.published.filter((p) => p.t === "view").length, atPairing, "25 minutes in is too early");
+  t.mock.timers.tick(3_000_000);
+  assert.equal(worker.published.filter((p) => p.t === "view").length, atPairing, "50 minutes in is too early");
 
-  t.mock.timers.tick(400_000);
+  t.mock.timers.tick(700_000);
   await new Promise((r) => setTimeout(r, 300)); // the look runs ps, so give the real clock a moment
   const views = worker.published.filter((p) => p.t === "view").slice(atPairing);
-  assert.equal(views.length, 1, "past half an hour the supervisor gets a look");
-  assert.equal(views[0].stopped, false, "this worker is mid-turn, so it is a check in");
+  assert.equal(views.length, 1, "past an hour the supervisor gets a look");  assert.equal(views[0].stopped, false, "this worker is mid-turn, so it is a check in");
   assert.match(views[0].view, /status: working, routine check in, no new turn for \d+[smh]/);
   // A look that forgets the subagent line reports "none" and unblocks done while one is running.
   assert.match(views[0].view, /^child pi processes still running: /m);
@@ -1305,6 +1304,24 @@ test("the supervisor gets a look at a working worker every half hour, without be
   t.mock.timers.tick(600_000);
   await new Promise((r) => setTimeout(r, 300)); // let any look that did start finish, so it counts
   assert.equal(worker.published.filter((p) => p.t === "view").length, after, "ten minutes is still too early");
+});
+
+test("the supervisor gets a view after 50 worker turns", async () => {
+  const entries = [message("user", "do the thing")];
+  const worker = harness(WORKER_ID, { entries, isIdle: false });
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((r) => setTimeout(r, 300));
+  const atPairing = worker.published.filter((p) => p.t === "view").length;
+
+  for (let turn = 0; turn < 50; turn++) entries.push(message("assistant", `turn ${turn}`));
+  await worker.turnStart();
+  await new Promise((r) => setTimeout(r, 300));
+
+  const views = worker.published.filter((p) => p.t === "view").slice(atPairing);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].stopped, false);
+  assert.match(views[0].view, /status: working, 50 turns since the prior review/);
 });
 
 test("a human message in the worker session is not a reason to stand back", async () => {
@@ -1361,17 +1378,17 @@ test("a stopped worker is looked at again, so let_it_run cannot silence the pair
   await worker.settle(); // the worker stops, and the supervisor answers let_it_run: no reply comes back
   const afterStop = worker.published.filter((p) => p.t === "view").length;
 
-  t.mock.timers.tick(1_900_000);
+  t.mock.timers.tick(3_700_000);
   await new Promise((r) => setTimeout(r, 300));
   const views = worker.published.filter((p) => p.t === "view").slice(afterStop);
-  assert.equal(views.length, 1, "half an hour later the supervisor is asked about the stopped worker again");
+  assert.equal(views.length, 1, "an hour later the supervisor is asked about the stopped worker again");
   assert.equal(views[0].stopped, true, "and is told the worker is still stopped");
   // The status line carries the one number that says how bad the silence is. wassname's ask after
   // the live incident: "be clear there have been no turns for this long, is it stuck".
   assert.match(views[0].view, /status: stopped, looked at again, no new turn for \d+[smh]/);
 
   // Unchanged is not a reason to stay quiet here: an unchanged stopped worker is the thing to fix.
-  t.mock.timers.tick(1_900_000);
+  t.mock.timers.tick(3_700_000);
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(worker.published.filter((p) => p.t === "view").length, afterStop + 2, "and again after that");
 });
@@ -1388,12 +1405,12 @@ test("a worker that pairs at the prompt and never takes a turn is still watched"
   const atPairing = worker.published.filter((p) => p.t === "view").length;
 
   // No turnStart and no settle: this worker has done nothing since it was paired.
-  t.mock.timers.tick(1_900_000);
+  t.mock.timers.tick(3_700_000);
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(
     worker.published.filter((p) => p.t === "view").length,
     atPairing + 1,
-    "half an hour after pairing the supervisor is shown the worker, with no turn having happened",
+    "an hour after pairing the supervisor is shown the worker, with no turn having happened",
   );
 });
 
@@ -1408,12 +1425,12 @@ test("a worker that reloads at the prompt starts watching itself again", async (
   await new Promise((r) => setTimeout(r, 300));
   const atReload = worker.published.filter((p) => p.t === "view").length;
 
-  t.mock.timers.tick(1_900_000);
+  t.mock.timers.tick(3_700_000);
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(
     worker.published.filter((p) => p.t === "view").length,
     atReload + 1,
-    "half an hour after the reload the supervisor is shown the idle worker",
+    "an hour after the reload the supervisor is shown the idle worker",
   );
 });
 
@@ -1430,7 +1447,7 @@ test("a timer look at a worker that has not moved is not sent, until it has been
   await worker.turnStart();
 
   const look = async () => {
-    t.mock.timers.tick(1_900_000);
+    t.mock.timers.tick(3_700_000);
     await new Promise((r) => setTimeout(r, 300)); // the look runs ps on the real clock
     return worker.published.filter((p) => p.t === "view").length;
   };

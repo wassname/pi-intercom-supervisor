@@ -142,7 +142,7 @@ connected and then says which it is: still supervising, or dropped because the o
 gone. A resumed supervisor also has its writing tools taken off again, which the `/supervise`
 handler alone would not do.
 
-The worker sends a view when it is paired, again whenever it stops, and every half hour in between.
+The worker sends a view when it is paired, again whenever it stops, after 50 new turns, and every hour in between.
 The pairing one exists because a worker paired while it sits at the prompt never settles, so waiting
 for its first stop can mean waiting for ever.
 
@@ -250,7 +250,7 @@ returns. `RESEARCH_JOURNAL.md` has the sessions these came out of.
 
 The `done` guard sees a child process named `pi` directly under the worker, so it misses a detached
 job, a queue, a training run, and a subagent started through an intermediate `node` process. Between
-looks the supervisor is blind, so half an hour is the worst case for spotting a wrong path. Shorten
+looks the supervisor is blind, so one hour is the worst case for spotting a wrong path. Shorten
 `WATCH_INTERVAL_MS` to pay more for a closer eye. Views are cut to 15 KB, oldest turns first,
 because the broker drops anything over 16 KiB and never tells the extension. The last pair wins and
 nothing authenticates it. The stagnation count lives in memory and restarts with the worker.
