@@ -178,6 +178,7 @@ export default function (pi: any) {
   let channel: IntercomExtensionChannel | undefined;
   let intercomRegistered = false;
   let sessionInitialized = false;
+  let disposed = false;
   let state: SuperviseState = { ...EMPTY_STATE };
   let latestView = "";
   /** Supervisor side: whether the worker was stopped in that view, which changes what let_it_run costs. */
@@ -350,6 +351,7 @@ export default function (pi: any) {
   async function rejoinOrDrop() {
     if (!state.role || !state.pairedId) return;
     const live = await channel!.listSessions();
+    if (disposed) return;
     if (!live.some((s: any) => s.id === state.pairedId)) {
       reset(`intercom-supervisor: ${state.pairedId.slice(0, 8)} is gone, so the pairing is dropped. Run /supervise to start again.`);
       return;
@@ -409,7 +411,9 @@ export default function (pi: any) {
   // ---- inbound, one branch per role ------------------------------------------------------
 
   async function onWire(from: string, wire: Wire) {
+    if (disposed) return;
     const me = await resolveOwnId();
+    if (disposed) return;
     debug("wire in", { t: wire.t, from: from.slice(0, 8), forUs: wire.to === me, role: state.role });
 
     // Answered before the addressed-to-us check below, because a roll call goes to everyone.
@@ -573,12 +577,14 @@ export default function (pi: any) {
     namespace: NAMESPACE,
     ownerEligible: false,
     onReady: (value: IntercomExtensionChannel) => {
+      if (disposed) return;
       channel = value;
       if (!value.snapshot().connected) return;
       resolveIntercomConnected();
       if (ctx) rejoinOrDrop().catch((err: Error) => debug("rejoin failed", { error: err.message }));
     },
     onEvent: (event: IntercomExtensionEvent) => {
+      if (disposed) return;
       if (event.type === "connection" && event.connected) {
         resolveIntercomConnected();
         if (ctx) rejoinOrDrop().catch((err: Error) => debug("rejoin failed", { error: err.message }));
@@ -589,14 +595,14 @@ export default function (pi: any) {
         // notice. resolveOwnId throws during a startup race.
         onWire(event.fromSessionId, event.payload).catch((err: Error) => {
           debug("wire dropped", { error: err.message });
-          ctx?.ui?.notify?.(`intercom-supervisor: dropped a message, ${err.message}`, "error");
+          if (!disposed) ctx?.ui?.notify?.(`intercom-supervisor: dropped a message, ${err.message}`, "error");
         });
       }
     },
   };
 
   function registerIntercom() {
-    if (intercomRegistered || channel) return;
+    if (disposed || intercomRegistered || channel) return;
     intercomRegistered = pi.events.emit(INTERCOM_EXTENSION_REGISTER_EVENT, intercomRegistration);
   }
 
@@ -618,6 +624,16 @@ export default function (pi: any) {
     }
   }
 
+  // Pi/OpenAI: Release callbacks before reload invalidates this extension's context.
+  pi.on("session_shutdown", async () => {
+    disposed = true;
+    clearInterval(watchTimer);
+    watchTimer = undefined;
+    clearTimeout(pairTimer);
+    pairTimer = undefined;
+    finishPair(new Error("Supervisor session ended."));
+  });
+
   pi.on("session_start", async (_event: unknown, context: any) => {
     initializeSession(context);
     registerIntercom();
@@ -633,6 +649,7 @@ export default function (pi: any) {
    * needs the whole picture again.
    */
   async function publishView(context: any, why: string, since = sentTurns, onlyIfChanged = false) {
+    if (disposed || context !== ctx) return;
     // Claimed before the await, not after. ps takes long enough that a second timer tick would
     // otherwise start its own look while this one is still waiting.
     lastLook = Date.now();
@@ -640,19 +657,22 @@ export default function (pi: any) {
     // Checked here too. This view replaces the one done reads, so leaving it out would report
     // "child pi processes still running: none" and unblock done while a subagent is running.
     const subagents = await childPiProcesses();
+    if (disposed || context !== ctx) return;
     // Asked at pairing and on a rejoin, and the worker is often sitting at the prompt then. Saying
     // "working" there sends the supervisor a check-in nudge about a worker that is waiting on it.
     const idle = context.isIdle();
     // One clock for both ways of being stuck: at the prompt, and inside a command that never
     // returns. It goes in the status line because bodyOf strips that line, so a number that moves
     // on its own cannot defeat the unchanged-view skip below.
+    const own = await ownSession();
+    if (disposed || context !== ctx) return;
     const view = buildView({
       goal: state.goal,
       status: `${idle ? "stopped" : "working"}, ${why}, no new turn for ${age(sinceLastTurn(entries))}`,
       entries,
       since,
       subagents,
-      model: workerModel(await ownSession()),
+      model: workerModel(own),
     });
     // A timer look at a worker that has done nothing since the last one wakes the supervisor to read
     // a view it has already read. Session 019ffa73: 13 of 92 verdicts were "check-in with no new
@@ -687,9 +707,9 @@ export default function (pi: any) {
    * sitting at the prompt had no timer at all, which is the same silence reached from the other end.
    */
   function startWatch() {
-    if (state.role !== "worker" || !channel || watchTimer) return;
+    if (disposed || state.role !== "worker" || !channel || watchTimer) return;
     watchTimer = setInterval(() => {
-      if (Date.now() - lastLook < WATCH_INTERVAL_MS) return;
+      if (disposed || Date.now() - lastLook < WATCH_INTERVAL_MS) return;
       // A stopped worker is always reported, never skipped as unchanged: an unchanged stopped worker
       // is the state that needs a steer, and nothing else is going to bring it up.
       const idle = ctx.isIdle();

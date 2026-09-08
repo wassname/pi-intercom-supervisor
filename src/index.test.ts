@@ -181,6 +181,9 @@ function harness(
       extension(pi as any);
       for (const fn of handlers.get("session_start") ?? []) await fn({}, ctx);
     },
+    async shutdown() {
+      for (const fn of handlers.get("session_shutdown") ?? []) await fn({}, ctx);
+    },
     async settle() {
       for (const fn of handlers.get("agent_settled") ?? []) await fn({}, ctx);
     },
@@ -218,6 +221,27 @@ function harness(
 const message = (role: string, text: string) => ({
   type: "message",
   message: { role, content: [{ type: "text", text }] },
+});
+
+test("shutdown clears the watcher before context invalidation and ignores late callbacks", async (t) => {
+  let tick: (() => void) | undefined;
+  const timer = { unref() {} };
+  t.mock.method(globalThis, "setInterval", (callback: () => void) => { tick = callback; return timer; });
+  const clear = t.mock.method(globalThis, "clearInterval", () => {});
+  const worker = harness(WORKER_ID);
+  await worker.start();
+  worker.deliver(SUPER_ID, { t: "pair", to: WORKER_ID, goal: "g" });
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.ok(tick, "pairing must start a watcher");
+  await worker.shutdown();
+  assert.ok(clear.mock.calls.some(call => call.arguments[0] === timer));
+  worker.ctx.isIdle = () => { throw new Error("stale extension ctx"); };
+  const published = worker.published.length;
+  t.mock.method(Date, "now", () => Number.MAX_SAFE_INTEGER);
+  assert.doesNotThrow(() => tick!());
+  worker.deliver(SUPER_ID, { t: "look", to: WORKER_ID });
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(worker.published.length, published);
 });
 
 test("a directive from the paired supervisor becomes a real user message", async () => {

@@ -1,0 +1,623 @@
+
+> @wassname2/pi-supervise@0.0.4 pretest
+> tsx scripts/make-fixture.ts
+
+wrote /home/code/.pi/agent/git/github.com/wassname/pi-supervise/test/forked-session.jsonl
+entries (excluding the session header): 410
+abandoned entries: 22
+
+> @wassname2/pi-supervise@0.0.4 test
+> tsx --test src/*.test.ts
+
+TAP version 13
+# Subtest: retries intercom registration when pi-intercom loads after pi-supervise
+ok 1 - retries intercom registration when pi-intercom loads after pi-supervise
+  ---
+  duration_ms: 1.927909
+  type: 'test'
+  ...
+# Subtest: a directive with no text is rejected, so the worker never sees undefined
+ok 2 - a directive with no text is rejected, so the worker never sees undefined
+  ---
+  duration_ms: 0.146405
+  type: 'test'
+  ...
+# Subtest: shutdown clears the watcher before context invalidation and ignores late callbacks
+ok 3 - shutdown clears the watcher before context invalidation and ignores late callbacks
+  ---
+  duration_ms: 53.815543
+  type: 'test'
+  ...
+# Subtest: a directive from the paired supervisor becomes a real user message
+ok 4 - a directive from the paired supervisor becomes a real user message
+  ---
+  duration_ms: 11.498775
+  type: 'test'
+  ...
+# Subtest: a directive to a busy worker interrupts, instead of waiting for the whole task
+ok 5 - a directive to a busy worker interrupts, instead of waiting for the whole task
+  ---
+  duration_ms: 11.730019
+  type: 'test'
+  ...
+# Subtest: a directive from an unpaired session is dropped
+ok 6 - a directive from an unpaired session is dropped
+  ---
+  duration_ms: 10.031441
+  type: 'test'
+  ...
+# Subtest: a second pair takes over, and the first supervisor is told it lost the worker
+ok 7 - a second pair takes over, and the first supervisor is told it lost the worker
+  ---
+  duration_ms: 21.746392
+  type: 'test'
+  ...
+# Subtest: only the paired worker can end a run
+ok 8 - only the paired worker can end a run
+  ---
+  duration_ms: 6.836484
+  type: 'test'
+  ...
+# Subtest: the programmatic pairing API waits for the worker acknowledgement
+ok 9 - the programmatic pairing API waits for the worker acknowledgement
+  ---
+  duration_ms: 1.132747
+  type: 'test'
+  ...
+# Subtest: the worker acknowledges a pair, so the supervisor knows it was heard
+ok 10 - the worker acknowledges a pair, so the supervisor knows it was heard
+  ---
+  duration_ms: 5.330306
+  type: 'test'
+  ...
+# Subtest: a goal the supervisor inferred reaches the worker, which owns the view header
+ok 11 - a goal the supervisor inferred reaches the worker, which owns the view header
+  ---
+  duration_ms: 51.579306
+  type: 'test'
+  ...
+# Subtest: the second view carries only what happened after the first
+ok 12 - the second view carries only what happened after the first
+  ---
+  duration_ms: 342.639297
+  type: 'test'
+  ...
+# Subtest: a message addressed to a different session is ignored
+ok 13 - a message addressed to a different session is ignored
+  ---
+  duration_ms: 10.90976
+  type: 'test'
+  ...
+# Subtest: on settle the worker publishes a view built from the live branch
+ok 14 - on settle the worker publishes a view built from the live branch
+  ---
+  duration_ms: 21.880474
+  type: 'test'
+  ...
+# Subtest: the view is built from the live branch, not from every entry in the session
+ok 15 - the view is built from the live branch, not from every entry in the session
+  ---
+  duration_ms: 20.164493
+  type: 'test'
+  ...
+# Subtest: an unpaired session publishes nothing on settle
+ok 16 - an unpaired session publishes nothing on settle
+  ---
+  duration_ms: 0.366949
+  type: 'test'
+  ...
+# Subtest: supervision never stops itself: no round limit at all
+ok 17 - supervision never stops itself: no round limit at all
+  ---
+  duration_ms: 10.079221
+  type: 'test'
+  ...
+# Subtest: goal, pairing and the steer count all survive a reload together
+ok 18 - goal, pairing and the steer count all survive a reload together
+  ---
+  duration_ms: 0.54305
+  type: 'test'
+  ...
+# Subtest: a view that arrives while the supervisor is thinking is queued, not dropped
+ok 19 - a view that arrives while the supervisor is thinking is queued, not dropped
+  ---
+  duration_ms: 5.283688
+  type: 'test'
+  ...
+# Subtest: the nudge repeats neither the instructions already sent nor the verdict rules
+ok 20 - the nudge repeats neither the instructions already sent nor the verdict rules
+  ---
+  duration_ms: 5.888093
+  type: 'test'
+  ...
+# Subtest: a multi-line goal returns to supervisor context every fifth review and after compaction
+ok 21 - a multi-line goal returns to supervisor context every fifth review and after compaction
+  ---
+  duration_ms: 31.647359
+  type: 'test'
+  ...
+# Subtest: a one-line goal is not redundantly reinserted
+ok 22 - a one-line goal is not redundantly reinserted
+  ---
+  duration_ms: 26.24087
+  type: 'test'
+  ...
+# Subtest: a check in and a worker that stopped ask for different things
+ok 23 - a check in and a worker that stopped ask for different things
+  ---
+  duration_ms: 11.006381
+  type: 'test'
+  ...
+# Subtest: a loop still gets named after the supervisor compacts, from restored state
+ok 24 - a loop still gets named after the supervisor compacts, from restored state
+  ---
+  duration_ms: 0.823195
+  type: 'test'
+  ...
+# Subtest: a session that does not answer the roll call is not offered as a worker
+ok 25 - a session that does not answer the roll call is not offered as a worker
+  ---
+  duration_ms: 500.738016
+  type: 'test'
+  ...
+# Subtest: a child run stays out of the roll call, so it can never be picked
+ok 26 - a child run stays out of the roll call, so it can never be picked
+  ---
+  duration_ms: 5.787555
+  type: 'test'
+  ...
+# Subtest: a session already paired stays out of the roll call, and a free one answers
+ok 27 - a session already paired stays out of the roll call, and a free one answers
+  ---
+  duration_ms: 15.633768
+  type: 'test'
+  ...
+# Subtest: /supervise look asks the worker for a fresh view, rather than the supervisor guessing
+ok 28 - /supervise look asks the worker for a fresh view, rather than the supervisor guessing
+  ---
+  duration_ms: 306.045907
+  type: 'test'
+  ...
+# Subtest: let_it_run says the turn is over, so it is not called four times running
+ok 29 - let_it_run says the turn is over, so it is not called four times running
+  ---
+  duration_ms: 0.624082
+  type: 'test'
+  ...
+# Subtest: a sign-off verdict is answered, not aborted, and a runaway is still cut
+ok 30 - a sign-off verdict is answered, not aborted, and a runaway is still cut
+  ---
+  duration_ms: 0.414568
+  type: 'test'
+  ...
+# Subtest: every verdict result names the way to end the turn, steer included
+ok 31 - every verdict result names the way to end the turn, steer included
+  ---
+  duration_ms: 0.25076
+  type: 'test'
+  ...
+# Subtest: an old view is dropped from context once its verdict is in, and the verdict is kept
+ok 32 - an old view is dropped from context once its verdict is in, and the verdict is kept
+  ---
+  duration_ms: 0.639961
+  type: 'test'
+  ...
+# Subtest: a worker session never has its context rewritten
+ok 33 - a worker session never has its context rewritten
+  ---
+  duration_ms: 0.187372
+  type: 'test'
+  ...
+# Subtest: a view that arrives mid-answer starts a fresh look
+ok 34 - a view that arrives mid-answer starts a fresh look
+  ---
+  duration_ms: 5.044439
+  type: 'test'
+  ...
+# Subtest: a tool a worker cannot use never aborts its turn
+ok 35 - a tool a worker cannot use never aborts its turn
+  ---
+  duration_ms: 0.259136
+  type: 'test'
+  ...
+# Subtest: a resume onto a session that is gone drops the pairing and says so
+ok 36 - a resume onto a session that is gone drops the pairing and says so
+  ---
+  duration_ms: 5.310088
+  type: 'test'
+  ...
+# Subtest: a resume onto a live worker keeps supervising, and takes the writers back off
+ok 37 - a resume onto a live worker keeps supervising, and takes the writers back off
+  ---
+  duration_ms: 5.659725
+  type: 'test'
+  ...
+# Subtest: state written before recentSteers existed still loads
+ok 38 - state written before recentSteers existed still loads
+  ---
+  duration_ms: 0.124935
+  type: 'test'
+  ...
+# Subtest: done unpairs the worker, so it stops publishing views
+ok 39 - done unpairs the worker, so it stops publishing views
+  ---
+  duration_ms: 325.463959
+  type: 'test'
+  ...
+# Subtest: with no goal the supervisor cannot steer, it must ask the human
+ok 40 - with no goal the supervisor cannot steer, it must ask the human
+  ---
+  duration_ms: 0.497745
+  type: 'test'
+  ...
+# Subtest: set_goal binds an inferred goal, and steering then works
+ok 41 - set_goal binds an inferred goal, and steering then works
+  ---
+  duration_ms: 500.831147
+  type: 'test'
+  ...
+# Subtest: a goal given at pair time still allows steering
+ok 42 - a goal given at pair time still allows steering
+  ---
+  duration_ms: 0.467979
+  type: 'test'
+  ...
+# Subtest: done is refused while the worker has an unanswered tool call
+ok 43 - done is refused while the worker has an unanswered tool call
+  ---
+  duration_ms: 10.913567
+  type: 'test'
+  ...
+# Subtest: done is allowed once nothing is outstanding
+ok 44 - done is allowed once nothing is outstanding
+  ---
+  duration_ms: 6.010473
+  type: 'test'
+  ...
+# Subtest: steer refuses when the session is not supervising
+ok 45 - steer refuses when the session is not supervising
+  ---
+  duration_ms: 0.2394
+  type: 'test'
+  ...
+# Subtest: a reworded repeat of an earlier instruction is sent, and named back to the supervisor
+ok 46 - a reworded repeat of an earlier instruction is sent, and named back to the supervisor
+  ---
+  duration_ms: 0.383901
+  type: 'test'
+  ...
+# Subtest: overlap scores rewording high and a different instruction low
+ok 47 - overlap scores rewording high and a different instruction low
+  ---
+  duration_ms: 0.093696
+  type: 'test'
+  ...
+# Subtest: the view of the old worker cannot be used to judge the new one
+ok 48 - the view of the old worker cannot be used to judge the new one
+  ---
+  duration_ms: 6.152029
+  type: 'test'
+  ...
+# Subtest: with one other session here, /supervise needs no target and the whole line is the goal
+ok 49 - with one other session here, /supervise needs no target and the whole line is the goal
+  ---
+  duration_ms: 501.32217
+  type: 'test'
+  ...
+# Subtest: naming the worker still works, and the rest of the line is the goal
+ok 50 - naming the worker still works, and the rest of the line is the goal
+  ---
+  duration_ms: 0.466385
+  type: 'test'
+  ...
+# Subtest: with two free sessions here, /supervise asks which one, and pairs with the choice
+ok 51 - with two free sessions here, /supervise asks which one, and pairs with the choice
+  ---
+  duration_ms: 501.885811
+  type: 'test'
+  ...
+# Subtest: a goal that is a path is read from the file, so it is not pasted every run
+ok 52 - a goal that is a path is read from the file, so it is not pasted every run
+  ---
+  duration_ms: 1.340677
+  type: 'test'
+  ...
+# Subtest: a long goal is one short line above the picker, and reaches the worker whole
+ok 53 - a long goal is one short line above the picker, and reaches the worker whole
+  ---
+  duration_ms: 501.113313
+  type: 'test'
+  ...
+# Subtest: a session that stayed quiet is still on the list, because 0 free is a dead end
+ok 54 - a session that stayed quiet is still on the list, because 0 free is a dead end
+  ---
+  duration_ms: 500.578924
+  type: 'test'
+  ...
+# Subtest: a cancelled picker pairs with nothing
+ok 55 - a cancelled picker pairs with nothing
+  ---
+  duration_ms: 501.382413
+  type: 'test'
+  ...
+# Subtest: supervising takes the writing tools away, and stopping gives them back
+ok 56 - supervising takes the writing tools away, and stopping gives them back
+  ---
+  duration_ms: 501.944832
+  type: 'test'
+  ...
+# Subtest: stopping gives back the writers without undoing another extension's tools
+ok 57 - stopping gives back the writers without undoing another extension's tools
+  ---
+  duration_ms: 501.581993
+  type: 'test'
+  ...
+# Subtest: a first word that names no session is refused, rather than folded into the goal
+ok 58 - a first word that names no session is refused, rather than folded into the goal
+  ---
+  duration_ms: 0.570932
+  type: 'test'
+  ...
+# Subtest: a goal with spaces needs no target, and @name takes the rest of the line as the goal
+ok 59 - a goal with spaces needs no target, and @name takes the rest of the line as the goal
+  ---
+  duration_ms: 502.060414
+  type: 'test'
+  ...
+# Subtest: the brief starts no turn, so there is no answer before the first view
+ok 60 - the brief starts no turn, so there is no answer before the first view
+  ---
+  duration_ms: 5.863517
+  type: 'test'
+  ...
+# Subtest: /supervise goal changes the goal without breaking the pairing
+ok 61 - /supervise goal changes the goal without breaking the pairing
+  ---
+  duration_ms: 0.592182
+  type: 'test'
+  ...
+# Subtest: the footer says which side of a pairing this session is, and clears when it ends
+ok 62 - the footer says which side of a pairing this session is, and clears when it ends
+  ---
+  duration_ms: 505.549546
+  type: 'test'
+  ...
+# Subtest: a session that is not supervising never sees the supervisor tools
+ok 63 - a session that is not supervising never sees the supervisor tools
+  ---
+  duration_ms: 5.802994
+  type: 'test'
+  ...
+# Subtest: worker_view refuses when there is no worker, rather than implying a pairing
+ok 64 - worker_view refuses when there is no worker, rather than implying a pairing
+  ---
+  duration_ms: 0.277541
+  type: 'test'
+  ...
+# (node:2637010) ExperimentalWarning: The MockTimers API is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the view names the worker's model and how full its context is
+ok 65 - the view names the worker's model and how full its context is
+  ---
+  duration_ms: 20.909694
+  type: 'test'
+  ...
+# Subtest: supervising a second session is refused while the first is still paired
+ok 66 - supervising a second session is refused while the first is still paired
+  ---
+  duration_ms: 0.897345
+  type: 'test'
+  ...
+# Subtest: the supervisor gets a look at a working worker every hour, without being asked
+ok 67 - the supervisor gets a look at a working worker every hour, without being asked
+  ---
+  duration_ms: 927.550876
+  type: 'test'
+  ...
+# Subtest: the supervisor gets a view after 50 worker turns
+ok 68 - the supervisor gets a view after 50 worker turns
+  ---
+  duration_ms: 618.602799
+  type: 'test'
+  ...
+# Subtest: a human message in the worker session is not a reason to stand back
+ok 69 - a human message in the worker session is not a reason to stand back
+  ---
+  duration_ms: 6.334842
+  type: 'test'
+  ...
+# Subtest: letting a stopped worker run says plainly that the worker stays stopped
+ok 70 - letting a stopped worker run says plainly that the worker stays stopped
+  ---
+  duration_ms: 10.29672
+  type: 'test'
+  ...
+# Subtest: a stopped worker is looked at again, so let_it_run cannot silence the pairing
+ok 71 - a stopped worker is looked at again, so let_it_run cannot silence the pairing
+  ---
+  duration_ms: 953.546563
+  type: 'test'
+  ...
+# Subtest: a worker that pairs at the prompt and never takes a turn is still watched
+ok 72 - a worker that pairs at the prompt and never takes a turn is still watched
+  ---
+  duration_ms: 607.083222
+  type: 'test'
+  ...
+# Subtest: a worker that reloads at the prompt starts watching itself again
+ok 73 - a worker that reloads at the prompt starts watching itself again
+  ---
+  duration_ms: 605.193378
+  type: 'test'
+  ...
+# Subtest: a timer look at a worker that has not moved is not sent, until it has been skipped three times
+ok 74 - a timer look at a worker that has not moved is not sent, until it has been skipped three times
+  ---
+  duration_ms: 2441.840158
+  type: 'test'
+  ...
+# Subtest: the worker counts reviews in a row where nothing changed
+ok 75 - the worker counts reviews in a row where nothing changed
+  ---
+  duration_ms: 362.972454
+  type: 'test'
+  ...
+# Subtest: an unacknowledged pair gives up, and a takeover cancels that timer
+ok 76 - an unacknowledged pair gives up, and a takeover cancels that timer
+  ---
+  duration_ms: 4.059501
+  type: 'test'
+  ...
+# Subtest: a child process named pi is found by ps, and stops being found when it exits
+ok 77 - a child process named pi is found by ps, and stops being found when it exits
+  ---
+  duration_ms: 368.629158
+  type: 'test'
+  ...
+# Subtest: the check is a snapshot, so it cannot hold up the worker's settle
+ok 78 - the check is a snapshot, so it cannot hold up the worker's settle
+  ---
+  duration_ms: 331.601131
+  type: 'test'
+  ...
+# Subtest: a one-line goal stays whole while a multi-line goal has a locator
+ok 79 - a one-line goal stays whole while a multi-line goal has a locator
+  ---
+  duration_ms: 3.097835
+  type: 'test'
+  ...
+# Subtest: a view carries only the turns the supervisor has not been sent
+ok 80 - a view carries only the turns the supervisor has not been sent
+  ---
+  duration_ms: 1.131564
+  type: 'test'
+  ...
+# Subtest: the last two reasoning blocks stay in the narrative, and older ones drop out
+ok 81 - the last two reasoning blocks stay in the narrative, and older ones drop out
+  ---
+  duration_ms: 0.747494
+  type: 'test'
+  ...
+# Subtest: a compaction restarts the view, so no turn falls into the gap
+ok 82 - a compaction restarts the view, so no turn falls into the gap
+  ---
+  duration_ms: 0.305253
+  type: 'test'
+  ...
+# Subtest: pi-vcc reports the files the worker wrote, and separates them from the ones it read
+ok 83 - pi-vcc reports the files the worker wrote, and separates them from the ones it read
+  ---
+  duration_ms: 0.654439
+  type: 'test'
+  ...
+# Subtest: progressKey is unchanged when a review produced no new file or commit
+ok 84 - progressKey is unchanged when a review produced no new file or commit
+  ---
+  duration_ms: 0.323217
+  type: 'test'
+  ...
+# Subtest: progressKey still sees a new file past pi-vcc's ten path display cap
+ok 85 - progressKey still sees a new file past pi-vcc's ten path display cap
+  ---
+  duration_ms: 0.266119
+  type: 'test'
+  ...
+# Subtest: a commit counts as progress, even when no file was written since
+ok 86 - a commit counts as progress, even when no file was written since
+  ---
+  duration_ms: 0.453591
+  type: 'test'
+  ...
+# Subtest: outstandingWork finds tool calls that never got a result
+ok 87 - outstandingWork finds tool calls that never got a result
+  ---
+  duration_ms: 0.726875
+  type: 'test'
+  ...
+# Subtest: buildView reports a tool call with no result, so done can be refused
+ok 88 - buildView reports a tool call with no result, so done can be refused
+  ---
+  duration_ms: 0.595147
+  type: 'test'
+  ...
+# Subtest: the view says how many reviews in a row changed nothing, and says nothing at zero
+ok 89 - the view says how many reviews in a row changed nothing, and says nothing at zero
+  ---
+  duration_ms: 0.425268
+  type: 'test'
+  ...
+# Subtest: the view merges the worker's compaction summary with the turns after it
+ok 90 - the view merges the worker's compaction summary with the turns after it
+  ---
+  duration_ms: 0.220464
+  type: 'test'
+  ...
+# Subtest: a turn the compaction summary already covers is not sent twice
+ok 91 - a turn the compaction summary already covers is not sent twice
+  ---
+  duration_ms: 0.175911
+  type: 'test'
+  ...
+# Subtest: pi-vcc's sections and its transcript land on the right sides of the split
+ok 92 - pi-vcc's sections and its transcript land on the right sides of the split
+  ---
+  duration_ms: 1.244947
+  type: 'test'
+  ...
+# Subtest: the view does not tell the supervisor to use vcc_recall, a tool it does not have
+ok 93 - the view does not tell the supervisor to use vcc_recall, a tool it does not have
+  ---
+  duration_ms: 0.166272
+  type: 'test'
+  ...
+# Subtest: supervisor directives are not sent back as worker evidence
+ok 94 - supervisor directives are not sent back as worker evidence
+  ---
+  duration_ms: 0.264356
+  type: 'test'
+  ...
+# Subtest: bookkeeping tool calls are kept out of the transcript
+ok 95 - bookkeeping tool calls are kept out of the transcript
+  ---
+  duration_ms: 0.211036
+  type: 'test'
+  ...
+# Subtest: buildView reports the goal, status, and files without historical failures
+ok 96 - buildView reports the goal, status, and files without historical failures
+  ---
+  duration_ms: 0.222618
+  type: 'test'
+  ...
+# Subtest: how long the worker has been quiet, measured from its own last entry
+ok 97 - how long the worker has been quiet, measured from its own last entry
+  ---
+  duration_ms: 0.238928
+  type: 'test'
+  ...
+# Subtest: buildView keeps the newest turns when it has to cut for the channel limit
+ok 98 - buildView keeps the newest turns when it has to cut for the channel limit
+  ---
+  duration_ms: 14.26607
+  type: 'test'
+  ...
+# Subtest: pi's own branch logic drops the abandoned fork, on a session file
+ok 99 - pi's own branch logic drops the abandoned fork, on a session file
+  ---
+  duration_ms: 1528.470809
+  type: 'test'
+  ...
+# Subtest: a long goal cannot push the view past the broker limit
+ok 100 - a long goal cannot push the view past the broker limit
+  ---
+  duration_ms: 0.441479
+  type: 'test'
+  ...
+1..100
+# tests 100
+# suites 0
+# pass 100
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 20414.52452
